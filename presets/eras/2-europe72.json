@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "id": "era-europe72",
+  "name": "1971-74 Europe '72",
+  "eraId": 2,
+  "fractal": "julia_orbit",
+  "palette": {
+    "stops": [
+      "#0E1729",
+      "#4A7FC1",
+      "#8B6FD4",
+      "#D9E4F5"
+    ],
+    "chromaBlend": 0.35,
+    "rotateByKey": true
+  },
+  "feedback": {
+    "decay": 0.985,
+    "zoom": 1.004,
+    "rotate": 0.0015,
+    "warpAmount": 0.35,
+    "warpScale": 2.4,
+    "bassGain": 1.2
+  },
+  "fractalParams": {
+    "iterations": 96,
+    "escapeRadius": 4,
+    "orbitRadius": 0.28,
+    "beatMorph": 0.6
+  },
+  "motifs": {
+    "bolt": {
+      "gain": 0.8,
+      "threshold": 0.55,
+      "forkDepth": 3
+    },
+    "rose": {
+      "gain": 1,
+      "chromaFluxThreshold": 0.4,
+      "petals": 13
+    },
+    "glyph": {
+      "gain": 0.2,
+      "atlas": "default",
+      "emitOn": "novelty"
+    }
+  },
+  "particles": {
+    "count": 24000,
+    "curlScale": 1.8,
+    "emitBand": 5,
+    "lifetime": 3.2
+  },
+  "post": {
+    "bloomThreshold": 0.7,
+    "bloomGain": 0.5,
+    "grain": 0.03,
+    "vignette": 0.25
+  },
+  "mapping": {
+    "sub": "feedbackZoom",
+    "bass": "warpAmount",
+    "lowMid": "fractalIterations",
+    "mid": "motifOpacity",
+    "presence": "particleEmit",
+    "air": "grain",
+    "stereoWidth": "symmetry",
+    "keyHue": "paletteRotate",
+    "novelty": "fractalMorph",
+    "percussivity": "motifGain"
+  },
+  "safety": {
+    "maxLuminanceDelta": 0.08,
+    "maxBrightness": 0.85
+  }
+}

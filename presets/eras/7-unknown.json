@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "id": "era-unknown",
+  "name": "Unknown / Studio",
+  "eraId": 7,
+  "fractal": "warp_fbm",
+  "palette": {
+    "stops": [
+      "#0B0D10",
+      "#2F4858",
+      "#86BBD8",
+      "#F6AE2D"
+    ],
+    "chromaBlend": 0.55,
+    "rotateByKey": true
+  },
+  "feedback": {
+    "decay": 0.983,
+    "zoom": 1.0035,
+    "rotate": 0.0014,
+    "warpAmount": 0.38,
+    "warpScale": 2.2,
+    "bassGain": 1.15
+  },
+  "fractalParams": {
+    "iterations": 88,
+    "escapeRadius": 4,
+    "orbitRadius": 0.25,
+    "beatMorph": 0.5
+  },
+  "motifs": {
+    "bolt": {
+      "gain": 0.75,
+      "threshold": 0.55,
+      "forkDepth": 3
+    },
+    "rose": {
+      "gain": 0.85,
+      "chromaFluxThreshold": 0.4,
+      "petals": 13
+    },
+    "glyph": {
+      "gain": 0.1,
+      "atlas": "default",
+      "emitOn": "novelty"
+    }
+  },
+  "particles": {
+    "count": 20000,
+    "curlScale": 1.7,
+    "emitBand": 5,
+    "lifetime": 3.2
+  },
+  "post": {
+    "bloomThreshold": 0.7,
+    "bloomGain": 0.5,
+    "grain": 0.03,
+    "vignette": 0.25
+  },
+  "mapping": {
+    "sub": "feedbackZoom",
+    "bass": "warpAmount",
+    "lowMid": "fractalIterations",
+    "mid": "motifOpacity",
+    "presence": "particleEmit",
+    "air": "grain",
+    "stereoWidth": "symmetry",
+    "keyHue": "paletteRotate",
+    "novelty": "fractalMorph",
+    "percussivity": "motifGain"
+  },
+  "safety": {
+    "maxLuminanceDelta": 0.08,
+    "maxBrightness": 0.85
+  }
+}

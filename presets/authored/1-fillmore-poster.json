@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "id": "fillmore-poster",
+  "name": "Fillmore Poster",
+  "eraId": 0,
+  "fractal": "warp_fbm",
+  "palette": {
+    "stops": [
+      "#120018",
+      "#FF1F6B",
+      "#FFD400",
+      "#00D9C0",
+      "#2B0140"
+    ],
+    "chromaBlend": 0.44,
+    "rotateByKey": true,
+    "spiral": 0.72
+  },
+  "feedback": {
+    "decay": 0.9735,
+    "zoom": 1.0062,
+    "rotate": 0.0031,
+    "warpAmount": 0.6,
+    "warpScale": 3.1,
+    "bassGain": 1.45,
+    "symmetry": 0.62,
+    "paintGain": 0.118,
+    "centerPull": 0.3,
+    "onsetDecay": 1
+  },
+  "fractalParams": {
+    "iterations": 64,
+    "escapeRadius": 4,
+    "orbitRadius": 0.34,
+    "beatMorph": 0.85,
+    "warp": 3.2,
+    "scale": 2.7,
+    "flow": 0.24,
+    "cells": 4.4,
+    "rim": 1.15,
+    "iridescence": 0.3,
+    "mask": -0.22,
+    "octaves": 4
+  },
+  "motifs": {
+    "bolt": {
+      "gain": 1.15,
+      "threshold": 0.5,
+      "forkDepth": 3
+    },
+    "rose": {
+      "gain": 0.55,
+      "chromaFluxThreshold": 0.42,
+      "petals": 17
+    },
+    "glyph": {
+      "gain": 0,
+      "atlas": "default",
+      "emitOn": "novelty"
+    }
+  },
+  "particles": {
+    "count": 22000,
+    "curlScale": 2.6,
+    "emitBand": 6,
+    "lifetime": 1.9,
+    "size": 2,
+    "rise": 0
+  },
+  "post": {
+    "bloomThreshold": 0.66,
+    "bloomGain": 0.48,
+    "bloomTaps": 2,
+    "bloomKnee": 0.3,
+    "grain": 0.045,
+    "vignette": 0.22,
+    "exposure": 0.67,
+    "saturation": 1.5
+  },
+  "mapping": {
+    "sub": "feedbackZoom",
+    "bass": "warpAmount",
+    "lowMid": "fractalIterations",
+    "mid": "motifOpacity",
+    "presence": "particleEmit",
+    "air": "grain",
+    "stereoWidth": "symmetry",
+    "keyHue": "paletteRotate",
+    "novelty": "fractalMorph",
+    "percussivity": "motifGain"
+  },
+  "safety": {
+    "maxLuminanceDelta": 0.065,
+    "maxBrightness": 0.8
+  }
+}

@@ -1,0 +1,66 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+
+    <!-- .NET 10 LTS (supported through Nov 2028). NOT net8.0 — .NET 8 and 9
+         both reach end of support on 2026-11-10.
+         The windows10.0.19041.0 platform version is what projects
+         Windows.Media.Control (SMTC) into C# with no interop layer. -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+
+    <!-- Required for zero-allocation DSP: raw spans and pointer arithmetic in
+         the FFT and ring buffer hot paths. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- Workstation concurrent GC. Server GC would reserve per-core heaps and
+         balloon the working set well past the 60 MB budget. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <AssemblyName>Ripple</AssemblyName>
+    <RootNamespace>Ripple</RootNamespace>
+    <ApplicationIcon>..\..\assets\ripple.ico</ApplicationIcon>
+
+    <!-- DO NOT enable PublishAot. CsWinRT projection + AOT trimming is a known
+         source of obscure runtime failures, and trimmed self-contained R2R
+         already lands comfortably inside the footprint budget. -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <PublishTrimmed>false</PublishTrimmed>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pin whatever `dotnet add package` resolves, then record the resolved
+         versions in README.md. Do not trust the version numbers below. -->
+    <PackageReference Include="Silk.NET.Windowing" Version="*" />
+    <PackageReference Include="Silk.NET.OpenGL" Version="*" />
+    <PackageReference Include="Silk.NET.Input" Version="*" />
+    <PackageReference Include="NAudio" Version="*" />
+
+    <!-- Optional convenience wrapper over SMTC. Try the raw
+         Windows.Media.Control API first; add this only if the async
+         session-event plumbing proves fiddly.
+    <PackageReference Include="Dubya.WindowsMediaController" Version="*" />
+    -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Shaders, presets, and data are loaded from disk at runtime so they can
+         hot-reload via FileSystemWatcher. Copy on build, do not embed. -->
+    <Content Include="..\..\shaders\**\*" LinkBase="shaders" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\presets\**\*.json" LinkBase="presets" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\data\**\*.json" LinkBase="data" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

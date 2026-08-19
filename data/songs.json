@@ -1,0 +1,178 @@
+{
+  "_comment": "Normalized title -> mode override. Merged OVER the era preset. Hot-reloaded. Extend freely.",
+  "_normalization": "lowercase, strip punctuation, strip '- live at ...', '(remastered)', '[live]', 'pt. N', trailing dates",
+  "dark star": {
+    "fractal": "mandel_zoom",
+    "feedback": {
+      "decay": 0.995
+    },
+    "tempoLock": false,
+    "intensityScale": 0.9
+  },
+  "space": {
+    "fractal": "kleinian",
+    "feedback": {
+      "decay": 0.998
+    },
+    "tempoLock": false,
+    "motifs": {
+      "glyph": {
+        "gain": 0.05
+      }
+    }
+  },
+  "drums": {
+    "fractal": "ifs_flame",
+    "tempoLock": true,
+    "percussiveGain": 2.0,
+    "particles": {
+      "count": 48000
+    }
+  },
+  "the other one": {
+    "fractal": "julia_orbit",
+    "feedback": {
+      "decay": 0.991,
+      "rotate": 0.0032
+    },
+    "tempoLock": false
+  },
+  "terrapin station": {
+    "fractal": "warp_fbm",
+    "motifs": {
+      "rose": {
+        "gain": 1.6
+      },
+      "glyph": {
+        "atlas": "terrapin",
+        "gain": 0.6
+      }
+    }
+  },
+  "fire on the mountain": {
+    "palette": {
+      "stops": [
+        "#140803",
+        "#7A1F0A",
+        "#E8551F",
+        "#FFC24A"
+      ]
+    },
+    "particles": {
+      "rise": 1.0,
+      "count": 30000
+    }
+  },
+  "st stephen": {
+    "fractal": "julia_orbit",
+    "motifs": {
+      "rose": {
+        "gain": 1.5,
+        "chromaFluxThreshold": 0.32
+      }
+    },
+    "bloomOnChordChange": 1.5
+  },
+  "china cat sunflower": {
+    "fractal": "apollonian",
+    "palette": {
+      "stops": [
+        "#1A0033",
+        "#FFE800",
+        "#00E5FF",
+        "#FF2D95"
+      ]
+    }
+  },
+  "i know you rider": {
+    "fractal": "warp_fbm",
+    "feedback": {
+      "warpAmount": 0.5
+    }
+  },
+  "eyes of the world": {
+    "fractal": "warp_fbm",
+    "feedback": {
+      "rotate": 0.004,
+      "warpScale": 1.6
+    },
+    "palette": {
+      "chromaBlend": 0.5
+    }
+  },
+  "ripple": {
+    "fractal": "warp_fbm",
+    "feedback": {
+      "decay": 0.99,
+      "warpAmount": 0.22
+    },
+    "intensityScale": 0.7
+  },
+  "scarlet begonias": {
+    "fractal": "warp_fbm",
+    "palette": {
+      "chromaBlend": 0.55
+    },
+    "motifs": {
+      "rose": {
+        "gain": 1.4
+      }
+    }
+  },
+  "morning dew": {
+    "fractal": "warp_fbm",
+    "feedback": {
+      "decay": 0.994,
+      "warpAmount": 0.2
+    },
+    "intensityScale": 0.75
+  },
+  "playing in the band": {
+    "fractal": "kleinian",
+    "tempoLock": false,
+    "feedback": {
+      "rotate": 0.0026
+    }
+  },
+  "help on the way": {
+    "fractal": "apollonian",
+    "tempoLock": true,
+    "feedback": {
+      "zoom": 1.005
+    }
+  },
+  "slipknot": {
+    "fractal": "kleinian",
+    "tempoLock": false,
+    "feedback": {
+      "decay": 0.992
+    }
+  },
+  "franklins tower": {
+    "fractal": "warp_fbm",
+    "tempoLock": true,
+    "particles": {
+      "count": 32000
+    }
+  },
+  "estimated prophet": {
+    "fractal": "julia_orbit",
+    "feedback": {
+      "warpAmount": 0.5
+    },
+    "palette": {
+      "chromaBlend": 0.45
+    }
+  },
+  "sugar magnolia": {
+    "fractal": "warp_fbm",
+    "motifs": {
+      "rose": {
+        "gain": 1.3
+      }
+    },
+    "palette": {
+      "chromaBlend": 0.5
+    }
+  }
+}

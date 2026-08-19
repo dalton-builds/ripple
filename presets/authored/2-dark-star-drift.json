@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "id": "dark-star-drift",
+  "name": "Dark Star Drift",
+  "eraId": 6,
+  "fractal": "warp_fbm",
+  "palette": {
+    "stops": [
+      "#01030A",
+      "#0B2340",
+      "#2E6E8E",
+      "#8FD6D0",
+      "#E8F4EF"
+    ],
+    "chromaBlend": 0.3,
+    "rotateByKey": true,
+    "spiral": 0.1
+  },
+  "feedback": {
+    "decay": 0.9955,
+    "zoom": 1.0016,
+    "rotate": 0.0005,
+    "warpAmount": 0.26,
+    "warpScale": 1.35,
+    "bassGain": 0.95,
+    "symmetry": 0,
+    "paintGain": 0.155,
+    "centerPull": 1,
+    "onsetDecay": 0.25
+  },
+  "fractalParams": {
+    "iterations": 96,
+    "escapeRadius": 4,
+    "orbitRadius": 0.18,
+    "beatMorph": 0.25,
+    "warp": 4.8,
+    "scale": 1.35,
+    "flow": 0.062,
+    "cells": 1.9,
+    "rim": 1.55,
+    "iridescence": 0.88,
+    "mask": 0.02,
+    "octaves": 6
+  },
+  "motifs": {
+    "bolt": {
+      "gain": 0.18,
+      "threshold": 0.72,
+      "forkDepth": 2
+    },
+    "rose": {
+      "gain": 0.7,
+      "chromaFluxThreshold": 0.3,
+      "petals": 8
+    },
+    "glyph": {
+      "gain": 0,
+      "atlas": "default",
+      "emitOn": "novelty"
+    }
+  },
+  "particles": {
+    "count": 26000,
+    "curlScale": 1.05,
+    "emitBand": 4,
+    "lifetime": 6.5,
+    "size": 1.8,
+    "rise": 0
+  },
+  "post": {
+    "bloomThreshold": 0.52,
+    "bloomGain": 0.8,
+    "bloomTaps": 3,
+    "bloomKnee": 0.46,
+    "grain": 0.018,
+    "vignette": 0.4,
+    "exposure": 0.77,
+    "saturation": 1.85
+  },
+  "mapping": {
+    "sub": "feedbackZoom",
+    "bass": "warpAmount",
+    "lowMid": "fractalMorph",
+    "mid": "none",
+    "presence": "particleEmit",
+    "air": "grain",
+    "stereoWidth": "none",
+    "keyHue": "paletteRotate",
+    "novelty": "feedbackDecay",
+    "percussivity": "motifGain"
+  },
+  "safety": {
+    "maxLuminanceDelta": 0.055,
+    "maxBrightness": 0.82
+  }
+}

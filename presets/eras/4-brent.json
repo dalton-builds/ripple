@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "id": "era-brent",
+  "name": "1980-86 Brent",
+  "eraId": 4,
+  "fractal": "apollonian",
+  "palette": {
+    "stops": [
+      "#050508",
+      "#00FF9C",
+      "#FF3D6E",
+      "#FFD400"
+    ],
+    "chromaBlend": 0.4,
+    "rotateByKey": true
+  },
+  "feedback": {
+    "decay": 0.968,
+    "zoom": 1.006,
+    "rotate": 0.0028,
+    "warpAmount": 0.48,
+    "warpScale": 2.9,
+    "bassGain": 1.35
+  },
+  "fractalParams": {
+    "iterations": 80,
+    "escapeRadius": 4,
+    "orbitRadius": 0.3,
+    "beatMorph": 0.75
+  },
+  "motifs": {
+    "bolt": {
+      "gain": 1.25,
+      "threshold": 0.55,
+      "forkDepth": 3
+    },
+    "rose": {
+      "gain": 0.6,
+      "chromaFluxThreshold": 0.4,
+      "petals": 13
+    },
+    "glyph": {
+      "gain": 0.25,
+      "atlas": "default",
+      "emitOn": "novelty"
+    }
+  },
+  "particles": {
+    "count": 26000,
+    "curlScale": 2.2,
+    "emitBand": 6,
+    "lifetime": 2.4
+  },
+  "post": {
+    "bloomThreshold": 0.7,
+    "bloomGain": 0.5,
+    "grain": 0.03,
+    "vignette": 0.25
+  },
+  "mapping": {
+    "sub": "feedbackZoom",
+    "bass": "warpAmount",
+    "lowMid": "fractalIterations",
+    "mid": "motifOpacity",
+    "presence": "particleEmit",
+    "air": "grain",
+    "stereoWidth": "symmetry",
+    "keyHue": "paletteRotate",
+    "novelty": "fractalMorph",
+    "percussivity": "motifGain"
+  },
+  "safety": {
+    "maxLuminanceDelta": 0.08,
+    "maxBrightness": 0.85
+  }
+}

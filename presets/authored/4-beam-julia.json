@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "id": "beam-julia",
+  "name": "Beam Julia",
+  "eraId": 2,
+  "fractal": "julia_orbit",
+  "palette": {
+    "stops": [
+      "#04060F",
+      "#153A6B",
+      "#5C7BD9",
+      "#B39BE8",
+      "#EAF0FF"
+    ],
+    "chromaBlend": 0.34,
+    "rotateByKey": true,
+    "spiral": 0.18
+  },
+  "feedback": {
+    "decay": 0.9905,
+    "zoom": 1.003,
+    "rotate": 0.0013,
+    "warpAmount": 0.33,
+    "warpScale": 2.1,
+    "bassGain": 1.2,
+    "symmetry": 0.55,
+    "paintGain": 0.104,
+    "centerPull": 0.6,
+    "onsetDecay": 0.5
+  },
+  "fractalParams": {
+    "iterations": 104,
+    "escapeRadius": 3.6,
+    "orbitRadius": 0.3,
+    "beatMorph": 0.72,
+    "warp": 3.4,
+    "scale": 2.3,
+    "flow": 0.15,
+    "cells": 3.2,
+    "rim": 1,
+    "iridescence": 0.5,
+    "mask": 0,
+    "octaves": 5,
+    "trapGain": 1.45
+  },
+  "motifs": {
+    "bolt": {
+      "gain": 0.7,
+      "threshold": 0.55,
+      "forkDepth": 3
+    },
+    "rose": {
+      "gain": 1.1,
+      "chromaFluxThreshold": 0.36,
+      "petals": 13
+    },
+    "glyph": {
+      "gain": 0,
+      "atlas": "default",
+      "emitOn": "novelty"
+    }
+  },
+  "particles": {
+    "count": 30000,
+    "curlScale": 1.9,
+    "emitBand": 5,
+    "lifetime": 3.6,
+    "size": 2.2,
+    "rise": 0
+  },
+  "post": {
+    "bloomThreshold": 0.58,
+    "bloomGain": 0.7,
+    "bloomTaps": 3,
+    "bloomKnee": 0.38,
+    "grain": 0.022,
+    "vignette": 0.3,
+    "exposure": 0.66,
+    "saturation": 1.9
+  },
+  "mapping": {
+    "sub": "feedbackZoom",
+    "bass": "warpAmount",
+    "lowMid": "fractalIterations",
+    "mid": "motifOpacity",
+    "presence": "particleEmit",
+    "air": "grain",
+    "stereoWidth": "symmetry",
+    "keyHue": "paletteRotate",
+    "novelty": "fractalMorph",
+    "percussivity": "motifGain"
+  },
+  "safety": {
+    "maxLuminanceDelta": 0.07,
+    "maxBrightness": 0.85
+  }
+}

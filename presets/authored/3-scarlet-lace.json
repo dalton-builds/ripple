@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "id": "scarlet-lace",
+  "name": "Scarlet Lace",
+  "eraId": 3,
+  "fractal": "apollonian",
+  "palette": {
+    "stops": [
+      "#0A0503",
+      "#5B1206",
+      "#D8541A",
+      "#F5B942",
+      "#FFF0C9"
+    ],
+    "chromaBlend": 0.3,
+    "rotateByKey": true,
+    "spiral": 0.4
+  },
+  "feedback": {
+    "decay": 0.9805,
+    "zoom": 1.0042,
+    "rotate": 0.0019,
+    "warpAmount": 0.4,
+    "warpScale": 2.35,
+    "bassGain": 1.3,
+    "symmetry": 0,
+    "paintGain": 0.098,
+    "centerPull": 0.5,
+    "onsetDecay": 0.8
+  },
+  "fractalParams": {
+    "iterations": 84,
+    "escapeRadius": 4,
+    "orbitRadius": 0.26,
+    "beatMorph": 0.6,
+    "warp": 3.4,
+    "scale": 2.3,
+    "flow": 0.15,
+    "cells": 3.2,
+    "rim": 1,
+    "iridescence": 0.5,
+    "mask": 0,
+    "octaves": 5,
+    "fold": 1.06,
+    "line": 0.82
+  },
+  "motifs": {
+    "bolt": {
+      "gain": 0.6,
+      "threshold": 0.58,
+      "forkDepth": 3
+    },
+    "rose": {
+      "gain": 1.55,
+      "chromaFluxThreshold": 0.32,
+      "petals": 13
+    },
+    "glyph": {
+      "gain": 0,
+      "atlas": "default",
+      "emitOn": "novelty"
+    }
+  },
+  "particles": {
+    "count": 20000,
+    "curlScale": 1.7,
+    "emitBand": 5,
+    "lifetime": 3,
+    "size": 2.4,
+    "rise": 0.35
+  },
+  "post": {
+    "bloomThreshold": 0.64,
+    "bloomGain": 0.56,
+    "bloomTaps": 2,
+    "bloomKnee": 0.34,
+    "grain": 0.03,
+    "vignette": 0.26,
+    "exposure": 0.79,
+    "saturation": 1.5
+  },
+  "mapping": {
+    "sub": "feedbackZoom",
+    "bass": "warpAmount",
+    "lowMid": "fractalIterations",
+    "mid": "motifOpacity",
+    "presence": "particleEmit",
+    "air": "grain",
+    "stereoWidth": "symmetry",
+    "keyHue": "paletteRotate",
+    "novelty": "fractalMorph",
+    "percussivity": "motifGain"
+  },
+  "safety": {
+    "maxLuminanceDelta": 0.07,
+    "maxBrightness": 0.84
+  }
+}

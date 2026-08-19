@@ -1,0 +1,3363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RIPPLE · visual harness</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#04060a; --panel:#080b0f; --panel2:#0b0f14; --line:#161c23; --line2:#222a33;
+  --txt:#c2c9d1; --dim:#8b959f; --dimmer:#78828c;
+  --acc:#e8b34a; --acc2:#4ec9a5; --live:#ff3d5e; --warn:#ff8a3d;
+  --mono:'IBM Plex Mono',ui-monospace,'SFMono-Regular',Menlo,Consolas,monospace;
+  --rowh:17px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:var(--bg)}
+body{
+  font-family:var(--mono);font-size:11px;line-height:1.35;color:var(--txt);
+  -webkit-font-smoothing:antialiased;
+  display:grid;grid-template-columns:1fr auto;
+}
+button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit}
+::selection{background:var(--acc);color:#000}
+
+/* ---------- stage ---------- */
+#stage{position:relative;overflow:hidden;background:#000}
+#gl{display:block;width:100%;height:100%}
+#glerr{position:absolute;inset:0;display:none;place-content:center;padding:40px;
+  color:var(--live);white-space:pre-wrap;font-size:12px;overflow:auto;background:#04060a}
+
+/* diagnostic HUD (Ctrl+Alt+D / D) */
+#hud{position:absolute;left:14px;bottom:12px;pointer-events:none;
+  font-size:10px;letter-spacing:.06em;color:#dfe5ea;text-shadow:0 1px 3px rgba(0,0,0,.9);
+  display:grid;gap:1px}
+#hud.off{display:none}
+#hud .k{color:#8d979f}
+#hud b{font-weight:500;color:var(--acc)}
+#cap{position:absolute;left:14px;bottom:12px;pointer-events:none;font-size:13px;
+  letter-spacing:.04em;color:#fff;text-shadow:0 1px 4px rgba(0,0,0,.95);opacity:0;transition:opacity .5s}
+#cap.on{opacity:1}
+#toast{position:absolute;top:12px;left:14px;font-size:10px;letter-spacing:.08em;
+  color:#04060a;background:var(--acc);padding:3px 7px;opacity:0;transition:opacity .25s;pointer-events:none}
+#toast.on{opacity:1}
+#sigil{position:absolute;top:12px;right:14px;font-size:9px;letter-spacing:.22em;
+  color:rgba(255,255,255,.28);pointer-events:none}
+
+/* ---------- panel ---------- */
+#panel{width:382px;background:var(--panel);border-left:1px solid var(--line2);
+  display:flex;flex-direction:column;height:100vh;transition:width .18s ease}
+#panel.collapsed{width:30px}
+#panel.collapsed>*:not(#rail){display:none}
+#rail{display:none}
+#panel.collapsed #rail{display:flex;flex-direction:column;align-items:center;gap:14px;padding:10px 0;height:100%}
+#rail .vt{writing-mode:vertical-rl;font-size:9px;letter-spacing:.3em;color:var(--dim)}
+
+/* header */
+#phead{border-bottom:1px solid var(--line2);background:var(--panel2);flex:none}
+#phead .r1{display:flex;align-items:center;gap:8px;padding:7px 9px 6px}
+#phead .mark{font-size:11px;font-weight:600;letter-spacing:.26em;color:var(--txt)}
+#phead .sub{font-size:9px;letter-spacing:.16em;color:var(--dimmer)}
+#phead .r2{display:flex;gap:0;border-top:1px solid var(--line)}
+#phead .stat{flex:1;padding:4px 8px;border-right:1px solid var(--line);min-width:0}
+#phead .stat:last-child{border-right:0}
+#phead .stat i{display:block;font-style:normal;font-size:8px;letter-spacing:.14em;color:var(--dimmer)}
+#phead .stat b{font-weight:500;font-variant-numeric:tabular-nums;font-size:11px;color:var(--txt)}
+#phead .stat b.hot{color:var(--warn)}
+
+.xbtn{background:transparent;border:1px solid var(--line2);color:var(--dim);
+  padding:2px 6px;font-size:9px;letter-spacing:.12em;cursor:pointer}
+.xbtn:hover{border-color:var(--dim);color:var(--txt)}
+.xbtn.on{border-color:var(--acc);color:var(--acc)}
+
+/* body */
+#pbody{overflow-y:auto;overflow-x:hidden;flex:1;scrollbar-width:thin;
+  scrollbar-color:var(--line2) transparent}
+#pbody::-webkit-scrollbar{width:9px}
+#pbody::-webkit-scrollbar-thumb{background:var(--line2)}
+#pbody::-webkit-scrollbar-track{background:transparent}
+
+.sec{border-bottom:1px solid var(--line)}
+.sec>h3{display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;
+  padding:5px 9px;font-size:9px;font-weight:500;letter-spacing:.2em;color:var(--dim);
+  background:var(--panel2);border-bottom:1px solid transparent}
+.sec>h3:hover{color:var(--txt)}
+.sec>h3 .cv{color:var(--dimmer);font-size:8px;width:6px}
+.sec>h3 .tag{margin-left:auto;font-size:8px;letter-spacing:.1em;color:var(--dimmer)}
+.sec.open>h3{border-bottom-color:var(--line);color:var(--txt)}
+.sec .body{display:none;padding:5px 9px 8px}
+.sec.open .body{display:block}
+
+/* control rows */
+.row{display:grid;grid-template-columns:96px 1fr 40px;align-items:center;
+  gap:6px;height:var(--rowh);margin-bottom:2px}
+.row>label{font-size:9px;letter-spacing:.07em;color:var(--dim);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.row>label.ap::after{content:'~';color:var(--warn);margin-left:3px}
+.row .num{font-size:10px;text-align:right;font-variant-numeric:tabular-nums;color:var(--txt)}
+.row.wide{grid-template-columns:96px 1fr}
+.row.f3{grid-template-columns:96px 1fr 40px 16px}
+
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:var(--rowh);
+  background:transparent;cursor:ew-resize}
+input[type=range]::-webkit-slider-runnable-track{height:1px;background:var(--line2)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:3px;height:11px;
+  background:var(--txt);margin-top:-5px;border-radius:0}
+input[type=range]:hover::-webkit-slider-thumb{background:var(--acc)}
+input[type=range]::-moz-range-track{height:1px;background:var(--line2)}
+input[type=range]::-moz-range-thumb{width:3px;height:11px;background:var(--txt);border:0;border-radius:0}
+input[type=range].lfo::-webkit-slider-thumb{background:var(--acc2)}
+
+select,input[type=text],input[type=number]{background:#030508;
+  border:1px solid var(--line2);padding:1px 4px;height:var(--rowh);width:100%;
+  border-radius:0;outline:none;font-size:10px}
+select:focus,input[type=text]:focus,input[type=number]:focus{border-color:var(--acc)}
+select{-webkit-appearance:none;appearance:none;
+  background-image:linear-gradient(45deg,transparent 50%,var(--dim) 50%),linear-gradient(135deg,var(--dim) 50%,transparent 50%);
+  background-position:calc(100% - 9px) 7px,calc(100% - 6px) 7px;
+  background-size:3px 3px,3px 3px;background-repeat:no-repeat;padding-right:16px}
+input[type=color]{-webkit-appearance:none;appearance:none;border:1px solid var(--line2);
+  width:100%;height:var(--rowh);padding:0;background:transparent;cursor:pointer}
+input[type=color]::-webkit-color-swatch-wrapper{padding:1px}
+input[type=color]::-webkit-color-swatch{border:0}
+
+.lfobtn{width:16px;height:13px;border:1px solid var(--line2);background:transparent;
+  color:var(--dimmer);font-size:8px;line-height:1;cursor:pointer;padding:0;display:grid;place-items:center}
+.lfobtn:hover{border-color:var(--dim)}
+.lfobtn.on{border-color:var(--acc2);color:var(--acc2)}
+.lfopanel{display:none;grid-template-columns:1fr 1fr 1fr;gap:4px;
+  margin:1px 0 4px 0;padding:4px 5px;background:#03050a;border-left:1px solid var(--acc2)}
+.lfopanel.on{display:grid}
+.lfopanel .cell i{display:block;font-style:normal;font-size:8px;letter-spacing:.1em;color:var(--dimmer)}
+
+.btnrow{display:flex;gap:4px;flex-wrap:wrap;margin:5px 0 1px}
+.hint{font-size:9px;color:var(--dimmer);letter-spacing:.03em;margin:4px 0 2px;line-height:1.45}
+.hint b{color:var(--dim);font-weight:400}
+.divider{height:1px;background:var(--line);margin:7px -9px 6px}
+.glabel{font-size:8px;letter-spacing:.2em;color:var(--dimmer);margin:7px 0 3px;
+  display:flex;align-items:center;gap:5px}
+.glabel::after{content:'';flex:1;height:1px;background:var(--line)}
+
+/* meters */
+.meters{display:grid;grid-template-columns:repeat(8,1fr);gap:2px;margin:4px 0 2px}
+.meters .m{height:34px;background:#03050a;position:relative;overflow:hidden}
+.meters .m span{position:absolute;left:0;right:0;bottom:0;background:var(--acc2)}
+.meters .lbl{font-size:8px;letter-spacing:.02em;color:var(--dimmer);text-align:center;overflow:hidden}
+.chgrid{display:grid;grid-template-columns:repeat(12,1fr);gap:1px}
+.chgrid .m{height:24px;background:#03050a;position:relative;overflow:hidden}
+.chgrid .m span{position:absolute;left:0;right:0;bottom:0;background:var(--acc)}
+.chgrid .lbl{font-size:8px;color:var(--dimmer);text-align:center}
+.led{display:inline-block;width:5px;height:5px;background:var(--line2);vertical-align:middle}
+.led.on{background:var(--live)}
+
+.kv{display:grid;grid-template-columns:1fr auto;gap:6px;font-size:9px;
+  color:var(--dim);height:14px;align-items:center}
+.kv b{font-weight:500;color:var(--txt);font-variant-numeric:tabular-nums}
+.kv b.bad{color:var(--live)}
+.kv b.ok{color:var(--acc2)}
+
+textarea{width:100%;height:88px;background:#030508;border:1px solid var(--line2);
+  font-size:9px;line-height:1.4;padding:4px;resize:vertical;outline:none;color:var(--dim)}
+textarea:focus{border-color:var(--acc)}
+.bar{height:2px;background:var(--line2);margin:4px 0}
+.bar>span{display:block;height:100%;background:var(--live);width:0}
+a{color:var(--acc);text-decoration:none}
+a:hover{color:var(--txt);text-decoration:underline}
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <canvas id="gl"></canvas>
+  <div id="glerr"></div>
+  <div id="sigil">RIPPLE / PHASE 0</div>
+  <div id="cap"></div>
+  <div id="hud" class="off"></div>
+  <div id="toast"></div>
+</div>
+
+<aside id="panel">
+  <div id="rail">
+    <button class="xbtn" id="railToggle" title="expand panel">&#9666;</button>
+    <div class="vt">RIPPLE HARNESS</div>
+  </div>
+
+  <div id="phead">
+    <div class="r1">
+      <span class="mark">RIPPLE</span>
+      <span class="sub">HARNESS 0.1</span>
+      <span style="flex:1"></span>
+      <button class="xbtn" id="hudToggle" title="diagnostic HUD (D)">HUD</button>
+      <button class="xbtn" id="collapse" title="collapse panel (Tab)">&#9656;</button>
+    </div>
+    <div class="r2">
+      <div class="stat"><i>FPS</i><b id="sFps">--</b></div>
+      <div class="stat"><i>FRAME</i><b id="sMs">--</b></div>
+      <div class="stat"><i>BUFFER</i><b id="sRes">--</b></div>
+      <div class="stat"><i>FRACTAL</i><b id="sFrac">--</b></div>
+      <div class="stat"><i>SRC</i><b id="sSrc">SYNTH</b></div>
+    </div>
+  </div>
+
+  <div id="pbody"></div>
+</aside>
+
+<script>
+/* ==========================================================================
+   RIPPLE — shader source.
+
+   CONTRACTS.md §3: every shader lives in its own template literal fenced with
+   a `// ===== FILE: <path> =====` marker. `tools/extract-shaders.mjs` splits
+   this block into the shaders/ tree with no judgment calls.
+
+   CONTRACTS.md §2: NO `#version` line in any file. The loader injects
+   `#version 300 es` + precision qualifiers + `#define RIPPLE_WEBGL 1`.
+   `#include "common/x.glsl"` is resolved by flat textual substitution with
+   cycle detection — the same resolver the native host must implement.
+   ========================================================================== */
+
+// ===== FILE: shaders/common/features.glsl =====
+const SH_FEATURES = `
+// ============================================================================
+//  Ripple — Feature Frame
+//  FROZEN CONTRACT. schemaVersion 1.
+// ============================================================================
+//  This file is shared VERBATIM between the WebGL2 harness and the native
+//  OpenGL host. Do not fork it. Do not add a #version line — each host
+//  injects its own preamble at load time (see ShaderLoader / harness loader).
+//
+//  Every member is vec4-aligned DELIBERATELY. std140 pads float[] and vec3 to
+//  a 16-byte stride, which is the single most common cause of silent uniform
+//  buffer corruption. Packing everything as vec4 eliminates that entire class
+//  of bug. Total size: 224 bytes (14 vec4). Assert this on the C# side.
+//
+//  All fields are normalized 0..1 EXCEPT where marked RAW.
+//  Normalization lives in the DSP, never in the shader — that is what makes
+//  presets portable and lets the synthetic driver produce valid states.
+// ----------------------------------------------------------------------------
+//  ONE sanctioned divergence, per CONTRACTS.md §2. GLSL ES 3.00 (WebGL2) does
+//  not accept the \`binding\` layout qualifier on a uniform block — it arrives
+//  in ES 3.10 / desktop GL 4.2. The harness therefore declares the block
+//  without it and calls glUniformBlockBinding(prog, idx, 0) at link time,
+//  which is bit-identical in effect. Guarded rather than forked so the file
+//  stays byte-identical across hosts.
+// ============================================================================
+
+#ifdef RIPPLE_WEBGL
+layout(std140) uniform FeatureFrame {
+#else
+layout(std140, binding = 0) uniform FeatureFrame {
+#endif
+    vec4 uTime;      // x: seconds since start        y: dt (seconds)
+                     // z: track position (seconds)   w: track fraction (0 if unknown)
+
+    vec4 uLevel;     // x: rms                        y: peak
+                     // z: slow loudness (3s EMA)     w: dynamics (peak - rms)
+
+    vec4 uBands[2];  // 8 perceptual bands, adaptively normalized (see plan 7.1)
+                     // [0].x sub 20-60      [0].y bass 60-150
+                     // [0].z lowMid 150-400 [0].w mid 400-1k
+                     // [1].x hiMid 1k-2.4k  [1].y presence 2.4k-5k
+                     // [1].z brilliance 5k-10k [1].w air 10k-16k
+
+    vec4 uRhythm;    // x: spectral flux              y: onset impulse (~150ms decay)
+                     // z: beat phase 0..1            w: bar phase 0..1 (4 beats)
+
+    vec4 uTempo;     // x: BPM 40..200 (RAW)          y: BPM confidence
+                     // z: beat counter (RAW, monotonic)  w: percussivity
+
+    vec4 uChroma[3]; // 12 pitch-class energies, C at [0].x, normalized to max=1
+                     // [0] = C  C# D  D#   [1] = E  F  F# G   [2] = G# A  A# B
+
+    vec4 uTonal;     // x: key hue 0..1 (circle of fifths)  y: key confidence
+                     // z: chroma flux (chord change)       w: spectral centroid
+
+    vec4 uSpace;     // x: stereo width               y: stereo balance -1..1 (RAW)
+                     // z: novelty (structural change) w: section phase
+
+    vec4 uCtl;       // x: master intensity           y: era id 0..7 (RAW)
+                     // z: song mode (RAW)            w: palette crossfade 0..1
+
+    vec4 uRes;       // x: width px (RAW)             y: height px (RAW)
+                     // z: aspect (RAW)               w: render scale
+
+    vec4 uReserved;  // Reserved for schemaVersion 2+. MUST be zero-filled by
+                     // both hosts. Exists so new fields can be added without
+                     // repacking or changing the buffer size — append here,
+                     // never reorder the blocks above.
+};
+
+// Size check: 13 declared vec4 above (uBands=2, uChroma=3) + uReserved = 14.
+// 14 * 16 = 224 bytes. Both hosts assert this.
+
+// ---------------------------------------------------------------------------
+//  Named accessors. USE THESE, not the raw swizzles — they are the stable API.
+//  If the packing ever has to change, only this block changes.
+// ---------------------------------------------------------------------------
+
+#define F_TIME          uTime.x
+#define F_DT            uTime.y
+#define F_TRACK_POS     uTime.z
+#define F_TRACK_FRAC    uTime.w
+
+#define F_RMS           uLevel.x
+#define F_PEAK          uLevel.y
+#define F_LOUD_SLOW     uLevel.z
+#define F_DYNAMICS      uLevel.w
+
+#define F_SUB           uBands[0].x
+#define F_BASS          uBands[0].y
+#define F_LOWMID        uBands[0].z
+#define F_MID           uBands[0].w
+#define F_HIMID         uBands[1].x
+#define F_PRESENCE      uBands[1].y
+#define F_BRILLIANCE    uBands[1].z
+#define F_AIR           uBands[1].w
+
+#define F_FLUX          uRhythm.x
+#define F_ONSET         uRhythm.y
+#define F_BEAT_PHASE    uRhythm.z
+#define F_BAR_PHASE     uRhythm.w
+
+#define F_BPM           uTempo.x
+#define F_BPM_CONF      uTempo.y
+#define F_BEAT_COUNT    uTempo.z
+#define F_PERCUSSIVITY  uTempo.w
+
+#define F_KEY_HUE       uTonal.x
+#define F_KEY_CONF      uTonal.y
+#define F_CHROMA_FLUX   uTonal.z
+#define F_CENTROID      uTonal.w
+
+#define F_STEREO_WIDTH  uSpace.x
+#define F_STEREO_BAL    uSpace.y
+#define F_NOVELTY       uSpace.z
+#define F_SECTION_PHASE uSpace.w
+
+#define F_INTENSITY     uCtl.x
+#define F_ERA           uCtl.y
+#define F_SONG_MODE     uCtl.z
+#define F_PALETTE_MIX   uCtl.w
+
+#define F_ASPECT        uRes.z
+#define F_RENDER_SCALE  uRes.w
+
+// Chroma is packed across three vec4s; index it through this.
+float chroma(int pc) {
+    int v = pc >> 2;
+    int c = pc & 3;
+    vec4 q = (v == 0) ? uChroma[0] : ((v == 1) ? uChroma[1] : uChroma[2]);
+    return (c == 0) ? q.x : ((c == 1) ? q.y : ((c == 2) ? q.z : q.w));
+}
+
+// Beat-synced ramps. Prefer these over raw time for anything rhythmic —
+// they degrade correctly when BPM confidence collapses (free-time passages),
+// because the DSP drives F_BEAT_PHASE from onset decay in that case.
+float beatPulse(float sharpness) {
+    return pow(1.0 - F_BEAT_PHASE, sharpness);
+}
+float barPulse(float sharpness) {
+    return pow(1.0 - F_BAR_PHASE, sharpness);
+}
+
+// Overall band energy, useful as a cheap global drive.
+float bandSum() {
+    return (uBands[0].x + uBands[0].y + uBands[0].z + uBands[0].w
+          + uBands[1].x + uBands[1].y + uBands[1].z + uBands[1].w) * 0.125;
+}
+`;
+// ===== END FILE =====
+
+// ===== FILE: shaders/common/noise.glsl =====
+const SH_NOISE = `
+// Simplex, fBm, curl and hashes. Shared by every paint pass.
+// Cost matters here: this file is the single largest GPU expense in the
+// pipeline, so every consumer passes an explicit octave count.
+
+vec3 rp_permute(vec3 x) { return mod(((x * 34.0) + 1.0) * x, 289.0); }
+
+// 2D simplex, roughly -1..1.
+float snoise(vec2 v) {
+    const vec4 C = vec4(0.211324865405187, 0.366025403784439,
+                       -0.577350269189626, 0.024390243902439);
+    vec2 i  = floor(v + dot(v, C.yy));
+    vec2 x0 = v - i + dot(i, C.xx);
+    vec2 i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+    vec4 x12 = x0.xyxy + C.xxzz;
+    x12.xy -= i1;
+    i = mod(i, 289.0);
+    vec3 p = rp_permute(rp_permute(i.y + vec3(0.0, i1.y, 1.0))
+                        + i.x + vec3(0.0, i1.x, 1.0));
+    vec3 m = max(0.5 - vec3(dot(x0, x0), dot(x12.xy, x12.xy), dot(x12.zw, x12.zw)), 0.0);
+    m = m * m; m = m * m;
+    vec3 x  = 2.0 * fract(p * C.www) - 1.0;
+    vec3 h  = abs(x) - 0.5;
+    vec3 ox = floor(x + 0.5);
+    vec3 a0 = x - ox;
+    m *= 1.79284291400159 - 0.85373472095314 * (a0 * a0 + h * h);
+    vec3 g;
+    g.x  = a0.x * x0.x + h.x * x0.y;
+    g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+    return 130.0 * dot(m, g);
+}
+
+// Normalized fBm, -1..1. oct is clamped to 8 by the fixed loop bound so the
+// compiler can still unroll.
+float fbm(vec2 p, int oct, float lac, float gain) {
+    float a = 0.5, s = 0.0, n = 0.0;
+    for (int i = 0; i < 6; i++) {
+        if (i >= oct) break;
+        s += a * snoise(p);
+        n += a;
+        p *= lac;
+        a *= gain;
+    }
+    return s / max(n, 1e-4);
+}
+float fbm2(vec2 p) { return fbm(p, 5, 2.02, 0.52); }
+
+// Cheap curl for particle advection and warp jitter. Two octaves, 4 taps —
+// this is called from a vertex shader at up to 64k invocations, so it is
+// deliberately the coarsest thing in the file.
+vec2 curl2lo(vec2 p) {
+    const float e = 0.11;
+    float n1 = snoise(p + vec2(0.0, e)) + 0.5 * snoise((p + vec2(0.0, e)) * 2.1);
+    float n2 = snoise(p - vec2(0.0, e)) + 0.5 * snoise((p - vec2(0.0, e)) * 2.1);
+    float n3 = snoise(p + vec2(e, 0.0)) + 0.5 * snoise((p + vec2(e, 0.0)) * 2.1);
+    float n4 = snoise(p - vec2(e, 0.0)) + 0.5 * snoise((p - vec2(e, 0.0)) * 2.1);
+    return vec2(n1 - n2, n4 - n3) / (3.0 * e);
+}
+
+float hash11(float p) {
+    p = fract(p * 0.1031);
+    p *= p + 33.33;
+    p *= p + p;
+    return fract(p);
+}
+float hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+vec2 hash22(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.xx + p3.yz) * p3.zy);
+}
+mat2 rot2(float a) { float s = sin(a), c = cos(a); return mat2(c, -s, s, c); }
+`;
+// ===== END FILE =====
+
+// ===== FILE: shaders/common/palette.glsl =====
+const SH_PALETTE = `
+// Palette lookup. The preset's colour stops are baked into a 256x1 LUT on the
+// host so the shader cost is one texture fetch. Requires common/features.glsl.
+
+uniform sampler2D uPalette;
+uniform float uPalRot;        // rotation of the LUT (keyHue routing lands here)
+uniform float uChromaBlend;   // preset palette.chromaBlend
+uniform float uSpiral;        // tie-dye spiral amount (plan 8.3)
+uniform float uSpiralSpin;    // host-advanced phase, BPM/4
+
+vec3 rp_hsv2rgb(vec3 c) {
+    vec3 p = abs(fract(c.xxx + vec3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+    return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
+}
+
+vec3 palSample(float t) {
+    return texture(uPalette, vec2(fract(t + uPalRot), 0.5)).rgb;
+}
+
+// Respond to the detected key by ROTATING the palette, not by blending toward
+// a raw HSV hue. Tinting toward an arbitrary hue drags colours into the frame
+// that the preset never declared — a blue-green wash over a magenta/amber
+// scheme — and it is the fastest way to make a carefully chosen palette read
+// as mud. Rotating stays inside the ramp, so a modulation reads as a shift
+// *within* the colour scheme. Weighted by key confidence, so an unconfident
+// read never yanks the scheme around.
+vec3 palChroma(float t) {
+    float w = clamp(uChromaBlend * (0.35 + 0.65 * F_KEY_CONF), 0.0, 1.0);
+    return mix(palSample(t), palSample(t + F_KEY_HUE * 0.5), w);
+}
+
+// The tie-dye spiral is applied to the palette LOOKUP, never to geometry.
+// Cheap, and it does more for period authenticity than any amount of mesh.
+float palSpiralT(vec2 uv, float t) {
+    vec2 c = uv - 0.5;
+    c.x *= F_ASPECT;
+    float r = length(c);
+    float a = atan(c.y, c.x);
+    return t + uSpiral * (a * 0.15915494 + r * 1.35 - uSpiralSpin);
+}
+`;
+// ===== END FILE =====
+
+// ===== FILE: shaders/common/sdf.glsl =====
+const SH_SDF = `
+// 2D SDF primitives + boolean ops for the motif layer.
+
+float sdCircle(vec2 p, float r) { return length(p) - r; }
+
+float sdSegment(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a, ba = b - a;
+    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+float sdBox(vec2 p, vec2 b) {
+    vec2 d = abs(p) - b;
+    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
+}
+
+// Rose / petal lobe: an arc thickened by a cosine profile.
+float sdPetal(vec2 p, float k, float len) {
+    float a = atan(p.y, p.x);
+    float r = length(p);
+    return r - len * abs(cos(k * a * 0.5));
+}
+
+float opUnion(float a, float b) { return min(a, b); }
+float opSub(float a, float b)   { return max(a, -b); }
+float opSmoothUnion(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+}
+`;
+// ===== END FILE =====
+
+// ===== FILE: shaders/common/safety.glsl =====
+const SH_SAFETY = `
+// Photosensitivity limiter — plan 12. Applied UNCONDITIONALLY in composite.frag.
+//
+// A preset may make this STRICTER but never looser: the host clamps the preset
+// values against the ceilings below before upload, so there is no code path in
+// which a preset relaxes the limiter. These two constants are the floor.
+
+#define RIPPLE_SAFETY_MAX_DELTA_CEIL   0.12   // max mean-luminance step / frame
+#define RIPPLE_SAFETY_MAX_BRIGHT_CEIL  0.92   // never full white
+
+uniform float uSafetyScale;   // host-computed rate-limit gain, <= 1.0
+uniform float uMaxBright;     // min(preset.safety.maxBrightness, CEIL)
+uniform float uHueRate;       // |d(paletteRotate)/dt|, drives the R<->B guard
+
+float rpLuma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+vec3 rippleSafety(vec3 col) {
+    // 1. luminance rate cap — the gain is closed-loop on the host from the
+    //    previous frame's measured mean luminance.
+    col *= clamp(uSafetyScale, 0.0, 1.0);
+
+    // 2. brightness ceiling.
+    float mb = min(uMaxBright, RIPPLE_SAFETY_MAX_BRIGHT_CEIL);
+    float l = rpLuma(col);
+    if (l > mb) col *= mb / max(l, 1e-5);
+
+    // 3. saturated red<->blue alternation is the highest-risk pattern. As the
+    //    palette rotation rate climbs, bleed saturation out of the R/B axis so
+    //    the interpolation path cannot swing between those poles at speed.
+    float rb   = abs(col.r - col.b) / max(max(col.r, col.b), 1e-5);
+    float risk = clamp(uHueRate * 7.0, 0.0, 1.0) * rb;
+    col = mix(col, vec3(rpLuma(col)), risk * 0.55);
+
+    return clamp(col, vec3(0.0), vec3(mb));
+}
+`;
+// ===== END FILE =====
+
+// ===== FILE: shaders/fullscreen.vert =====
+const SH_FULLSCREEN_VERT = `
+// Attributeless full-screen triangle. No VBO, no VAO state to get wrong.
+out vec2 vUv;
+void main() {
+    vec2 p = vec2((gl_VertexID == 1) ? 3.0 : -1.0,
+                  (gl_VertexID == 2) ? 3.0 : -1.0);
+    vUv = (p + 1.0) * 0.5;
+    gl_Position = vec4(p, 0.0, 1.0);
+}
+`;
+// ===== END FILE =====
+
+// ===== FILE: shaders/passes/warp.frag =====
+const SH_WARP = `
+#include "common/features.glsl"
+#include "common/noise.glsl"
+
+// PASS A — feedback displacement. This is the MilkDrop core and the reason the
+// whole pipeline is cheap: the image accumulates complexity over time instead
+// of being recomputed. Decay is the highest-value parameter in the system.
+
+uniform sampler2D uPrev;
+uniform float uDecay;        // 0.94 .. 0.999
+uniform float uZoom;
+uniform float uRotate;
+uniform float uWarpAmount;
+uniform float uWarpScale;
+uniform float uBassGain;
+uniform float uSymmetry;     // 0 = off; > 0.5 folds into 2N sectors
+uniform float uOnsetDecay;   // onset-driven decay dip
+uniform float uCenterPull;
+
+in vec2 vUv;
+out vec4 fragColor;
+
+void main() {
+    vec2 c = vUv - 0.5;
+    c.x *= F_ASPECT;
+
+    // Kaleidoscopic fold. Routed from stereo width by default, which gives
+    // free era differentiation: a 1969 two-track and the Wall of Sound image
+    // very differently for zero extra cost.
+    if (uSymmetry > 0.5) {
+        float sectors = floor(2.0 + uSymmetry * 5.0) * 2.0;
+        float seg = 6.28318531 / sectors;
+        float a = atan(c.y, c.x);
+        float r = length(c);
+        a = abs(mod(a + seg * 0.5, seg) - seg * 0.5);
+        c = vec2(cos(a), sin(a)) * r;
+    }
+
+    float t = F_TIME;
+    float bass = F_BASS * uBassGain;
+
+    float ang  = uRotate * (1.0 + 0.9 * F_STEREO_WIDTH) + uRotate * 0.5 * sin(t * 0.11);
+    float zoom = uZoom + F_SUB * 0.011 * uBassGain + beatPulse(3.0) * 0.0018 * F_BPM_CONF;
+    c = rot2(ang) * c / max(zoom, 0.5);
+
+    // fBm domain warp of the *lookup*, not of the paint. Two fields plus a
+    // curl term: the curl is what stops the flow reading as a scrolling texture.
+    vec2 q = c * uWarpScale;
+    vec2 d = vec2(fbm(q + vec2(0.0, t * 0.09), 3, 2.03, 0.55),
+                  fbm(q + vec2(11.7, -3.1) - vec2(t * 0.07, 0.0), 3, 2.03, 0.55));
+    d += 0.30 * curl2lo(q * 0.55 + vec2(t * 0.04, 0.0));
+    c += d * (0.008 + uWarpAmount * 0.030) * (0.40 + 0.95 * bass);
+
+    c -= c * uCenterPull * 0.005;
+
+    c.x /= F_ASPECT;
+    vec2 uv = c + 0.5;
+
+    float decay = uDecay - uOnsetDecay * 0.05 * F_ONSET;
+
+    vec3 prev = texture(uPrev, uv).rgb;
+
+    // Edge falloff. Without it the warp drags the border colour inward and the
+    // frame slowly fills with a single hue.
+    vec2 e = smoothstep(vec2(0.0), vec2(0.04), uv)
+           * smoothstep(vec2(0.0), vec2(0.04), 1.0 - uv);
+    prev *= e.x * e.y;
+
+    fragColor = vec4(prev * clamp(decay, 0.0, 0.9995), 1.0);
+}
+`;
+// ===== END FILE =====
+
+// ===== FILE: shaders/passes/bright.frag =====
+const SH_BRIGHT = `
+uniform sampler2D uSrc;
+uniform float uThreshold;
+uniform float uKnee;
+in vec2 vUv;
+out vec4 fragColor;
+void main() {
+    vec3 c = texture(uSrc, vUv).rgb;
+    float l = max(max(c.r, c.g), c.b);
+    float s = clamp((l - uThreshold) / max(uKnee, 1e-3), 0.0, 1.0);
+    fragColor = vec4(c * s * s, 1.0);
+}
+`;
+// ===== END FILE =====
+
+// ===== FILE: shaders/passes/blur.frag =====
+const SH_BLUR = `
+// Separable blur, 1-3 taps per side. Plan 8.1 explicitly wants a 2-tap
+// down/up rather than a full pyramid — the bloom is an accent, not the look.
+uniform sampler2D uSrc;
+uniform vec2 uDir;
+uniform float uTaps;
+in vec2 vUv;
+out vec4 fragColor;
+void main() {
+    vec3 s = texture(uSrc, vUv).rgb * 0.34;
+    float w = 0.34;
+    s += (texture(uSrc, vUv + uDir).rgb + texture(uSrc, vUv - uDir).rgb) * 0.24;
+    w += 0.48;
+    if (uTaps > 1.5) {
+        s += (texture(uSrc, vUv + uDir * 2.6).rgb + texture(uSrc, vUv - uDir * 2.6).rgb) * 0.12;
+        w += 0.24;
+    }
+    if (uTaps > 2.5) {
+        s += (texture(uSrc, vUv + uDir * 5.1).rgb + texture(uSrc, vUv - uDir * 5.1).rgb) * 0.06;
+        w += 0.12;
+    }
+    fragColor = vec4(s / w, 1.0);
+}
+`;
+// ===== END FILE =====
+
+// ===== FILE: shaders/passes/composite.frag =====
+const SH_COMPOSITE = `
+#include "common/features.glsl"
+#include "common/noise.glsl"
+#include "common/safety.glsl"
+
+// PASS C — tonemap, bloom, grain, vignette, safety clamp. Full resolution.
+
+uniform sampler2D uScene;
+uniform sampler2D uBloom;
+uniform float uExposure;
+uniform float uBloomGain;
+uniform float uGrain;
+uniform float uVignette;
+uniform float uSaturate;  // additive accumulation greys out; this pays it back
+uniform float uIdle;      // 1 = live, 0.3 = idle dim (plan 11)
+
+in vec2 vUv;
+out vec4 fragColor;
+
+void main() {
+    vec3 c = texture(uScene, vUv).rgb;
+    c += texture(uBloom, vUv).rgb * uBloomGain;
+    c *= uExposure * mix(0.30, 1.0, clamp(uIdle, 0.0, 1.0));
+
+    // filmic curve — keeps the additive feedback buffer from clipping to white
+    c = (c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14);
+
+    // Many additive layers of different hues average toward grey, and the
+    // filmic knee desaturates further. Pull it back after the curve, not
+    // before, so the highlights keep their pigment.
+    c = max(vec3(0.0), mix(vec3(dot(c, vec3(0.2126, 0.7152, 0.0722))), c, uSaturate));
+
+    float g = hash12(vUv * vec2(1913.0, 1487.0) + fract(F_TIME * 3.7) * 137.0) - 0.5;
+    c += g * uGrain * (0.35 + 0.75 * F_AIR);
+
+    vec2 q = vUv - 0.5;
+    q.x *= F_ASPECT;
+    c *= 1.0 - uVignette * smoothstep(0.26, 0.88, length(q));
+
+    fragColor = vec4(rippleSafety(c), 1.0);
+}
+`;
+// ===== END FILE =====
+
+// ===== FILE: shaders/passes/particles.vert =====
+const SH_PARTICLES_VERT = `
+#include "common/features.glsl"
+#include "common/noise.glsl"
+#include "common/palette.glsl"
+
+// Instanced-in-spirit but attribute-cheap: two floats per particle and the
+// whole trajectory is evaluated in the vertex shader from curl noise, so the
+// CPU does nothing per frame and there is no transform-feedback state.
+
+in vec2 aSeed;
+in float aIdx;
+
+uniform float uCurlScale;
+uniform float uLifetime;
+uniform float uSize;
+uniform float uEmit;
+uniform float uRise;
+
+out float vA;
+out vec3 vC;
+
+void main() {
+    float life = max(uLifetime, 0.25);
+    float age  = mod(F_TIME * (0.55 + 0.85 * F_PRESENCE) + aSeed.x * life, life);
+    float k    = age / life;
+
+    vec2 p0 = aSeed * 2.0 - 1.0;
+    p0 += 0.30 * (hash22(vec2(aIdx, aIdx * 1.7)) - 0.5);
+
+    // Advection: two curl samples at different scales, integrated as a
+    // quadratic in age. Visually indistinguishable from stepwise integration
+    // at this scale and a fraction of the cost.
+    vec2 v1 = curl2lo(p0 * uCurlScale + vec2(0.0, F_TIME * 0.06));
+    float sw = snoise(p0 * uCurlScale * 2.4 - vec2(F_TIME * 0.045, 0.0));
+    vec2 v2 = vec2(-v1.y, v1.x) * sw;
+    vec2 p  = p0 + v1 * age * 0.135 + v2 * age * age * 0.045;
+    p.y += uRise * age * 0.20;
+
+    float fade = smoothstep(0.0, 0.09, k) * (1.0 - k) * (1.0 - k);
+    float burst = F_ONSET * step(hash11(aIdx * 0.37), 0.30);
+    vA = fade * uEmit * (0.16 + 0.95 * F_PRESENCE + 1.5 * burst);
+
+    float pt = fract(0.15 + 0.55 * hash11(aIdx * 2.9) + 0.30 * F_KEY_HUE);
+    vC = palChroma(palSpiralT(p * 0.5 + 0.5, pt));
+
+    gl_PointSize = max(1.0, uSize * (0.35 + 1.7 * (1.0 - k)) * F_RENDER_SCALE);
+    p.x /= max(F_ASPECT, 0.2);
+    gl_Position = vec4(p, 0.0, 1.0);
+}
+`;
+// ===== END FILE =====
+
+// ===== FILE: shaders/passes/particles.frag =====
+const SH_PARTICLES_FRAG = `
+#include "common/features.glsl"
+
+uniform float uPaint;
+in float vA;
+in vec3 vC;
+out vec4 fragColor;
+
+void main() {
+    vec2 d = gl_PointCoord - 0.5;
+    float a = exp(-4.6 * dot(d, d) * 4.0);
+    fragColor = vec4(vC * a * vA * uPaint * F_INTENSITY * 2.4, 1.0);
+}
+`;
+// ===== END FILE =====
+</script>
+
+<script>
+/* ==========================================================================
+   RIPPLE — fractal families and motifs. One program per family; deliberately
+   NOT an uber-shader (plan 8.2 — register pressure from the union of all
+   families would slow down the cheap ones).
+   ========================================================================== */
+
+// ===== FILE: shaders/fractal/warp_fbm.frag =====
+const SH_WARP_FBM = `
+#include "common/features.glsl"
+#include "common/noise.glsl"
+#include "common/palette.glsl"
+
+// ---------------------------------------------------------------------------
+//  HERO. Recursive domain-warped fBm, tuned to read as an oil-and-water
+//  liquid light projection rather than as a noise demo.
+//
+//  What makes it read as liquid rather than as clouds — in order of how much
+//  each one matters:
+//
+//   1. TWO immiscible fields, differenced. A single fBm is a cloud. The
+//      difference of two independently warped fields has zero-crossings that
+//      behave like a meniscus: they stretch, pinch and snap.
+//   2. BANDING with thin bright rims. Real oil on a clock glass has flat
+//      interior colour and a bright edge where light refracts through the
+//      film boundary. Quantising the interference field into cells and
+//      lighting only the cell walls is the whole trick.
+//   3. THIN-FILM IRIDESCENCE on those rims, driven by the local gradient.
+//      This is the specific thing that makes it look wet.
+//   4. NEGATIVE SPACE. A low-frequency mask keeps roughly a third of the
+//      frame dark. Without it the feedback buffer saturates and the trails —
+//      which are doing most of the visual work — stop reading at all.
+//   5. PER-CELL TINT. Each cell samples the palette at its own offset, so the
+//      frame looks like several different pigments, not one gradient.
+// ---------------------------------------------------------------------------
+
+uniform float uWarp;      // domain-warp strength (the recursion gain)
+uniform float uScale;     // base spatial frequency
+uniform float uFlow;      // time rate
+uniform float uCells;     // oil-cell density
+uniform float uRim;       // rim highlight gain
+uniform float uRimWidth;  // rim thickness in pixels (screen-space, not field-space)
+uniform float uIrid;      // thin-film iridescence 0..1
+uniform float uMask;      // negative-space bias
+uniform float uOct;       // detail octaves (governor dial)
+uniform float uPaint;     // paint gain, decay-normalized on the host
+
+in vec2 vUv;
+out vec4 fragColor;
+
+// One recursion of Inigo Quilez's domain warp. The intermediate field is
+// returned so the second layer can reuse it instead of paying for its own.
+float liquid(vec2 p, float t, float amt, int oct, out vec2 mid) {
+    vec2 q = vec2(fbm(p + vec2(0.0, 0.55 * t), 2, 2.05, 0.52),
+                  fbm(p + vec2(5.2, 1.3) - vec2(0.42 * t, 0.0), 2, 2.05, 0.52));
+    vec2 r = vec2(fbm(p + amt * q + vec2(1.7, 9.2) + vec2(0.28 * t, 0.0), 3, 2.05, 0.52),
+                  fbm(p + amt * q + vec2(8.3, 2.8) - vec2(0.0, 0.21 * t), 3, 2.05, 0.52));
+    mid = r;
+    return fbm(p + amt * r, oct, 2.02, 0.52);
+}
+
+void main() {
+    float t = F_TIME * uFlow;
+    vec2 uv = vUv;
+    vec2 p = uv - 0.5;
+    p.x *= F_ASPECT;
+
+    // Sub bass breathes the whole field in and out. Small number, large effect.
+    p *= uScale * (1.0 - 0.12 * F_SUB);
+    p = rot2(0.018 * t + 0.35 * F_STEREO_WIDTH) * p;
+
+    int oct = int(clamp(uOct, 2.0, 6.0));
+    float amt = uWarp * (0.65 + 1.15 * F_BASS);
+
+    vec2 mid;
+    float f = liquid(p, t, amt, oct, mid);
+    // Second field: reuses the first field's warp vector, counter-rotating in
+    // time. One extra fbm instead of five.
+    float g = fbm(p * 0.63 + mid * amt * 0.75 + vec2(19.3, 4.7)
+                  - vec2(t * 0.46, t * 0.13), oct, 2.02, 0.52);
+
+    float iso = f * 1.25 - g * 0.85;
+
+    // --- oil cells -------------------------------------------------------
+    float dens = uCells * (1.0 + 0.30 * F_LOWMID);
+    float n    = iso * dens + 0.14 * t + 0.22 * F_BAR_PHASE;
+    float cell = floor(n);
+    float fr   = fract(n);
+
+    // The meniscus is the whole trick, and it has to be a CONSTANT number of
+    // pixels wide or it reads as a soft gradient instead of a film boundary.
+    // fwidth(n) is the field's rate of change per pixel, so dividing by it
+    // converts a field-space distance into a screen-space one — thin bright
+    // edges everywhere, including where the field is nearly flat.
+    float aa    = max(fwidth(n), 1e-5);
+    float dWall = min(fr, 1.0 - fr);
+    float rimW  = min(uRimWidth * aa, 0.42);
+    float rim   = 1.0 - smoothstep(0.0, rimW, dWall);
+    float wall  = smoothstep(0.0, rimW * 3.2, dWall);
+
+    // --- pigment + negative space ----------------------------------------
+    // The pigment field is DELIBERATELY the lowest frequency thing here. A
+    // high-frequency palette lookup averages to grey inside the feedback
+    // trail; big single-hue blobs survive it, which is what makes the frame
+    // look like several different oils rather than one gradient. The same
+    // field carries the negative space, so a pigment always has an edge.
+    float pig  = fbm(p * 0.24 + vec2(0.0, t * 0.085), 2, 2.1, 0.5);
+    float mask = smoothstep(0.34, 0.66, pig * 0.5 + 0.5 + 0.09 * F_RMS - uMask);
+
+    float grad = length(mid - vec2(g)) * 0.5;
+    // A NARROW palette window, drifting slowly, is what keeps the image
+    // chromatic. The feedback trail sums ~1/(1-decay) samples of the palette;
+    // if that window is wide the sum averages to grey no matter how saturated
+    // each sample was. Narrow window + slow drift = one coherent pigment per
+    // region, and the trail stays the colour it started.
+    float ct = 0.5 + 0.22 * pig + 0.11 * hash11(cell * 1.37) + 0.06 * F_CENTROID;
+    vec3 body = palChroma(palSpiralT(uv, ct));
+    // Thin-film shimmer, sampled from the PALETTE rather than from a raw hue
+    // wheel — iridescence that cannot introduce an off-scheme colour.
+    vec3 film = palChroma(palSpiralT(uv, ct + 0.09 + 0.30 * fract(grad * 1.7 + 0.30 * iso + 0.09 * t))) * 1.55;
+
+    // The paint per frame is deliberately SPARSE and high contrast: a dim body
+    // and a hot, thin meniscus. That matters more than it looks. The feedback
+    // buffer reaches equilibrium at paint/(1-decay), so a paint layer that
+    // covers the whole frame evenly accumulates to a flat wash no matter how it
+    // is scaled. Paint only the moving edges and the trail becomes ribbons.
+    vec3 col = body * (0.05 + 0.34 * wall) * (0.62 + 0.55 * f);
+    // The meniscus is bright but must stay CHROMATIC — pushing a palette colour
+    // past ~1.4 clips its largest channel and the highlight turns white, which
+    // is how a colour scheme quietly becomes grey. Bloom supplies the heat.
+    col += mix(palChroma(palSpiralT(uv, ct + 0.17)) * 1.45, film * 0.9, clamp(uIrid, 0.0, 1.0))
+         * rim * uRim * (0.50 + 1.20 * F_HIMID + 0.60 * F_BRILLIANCE);
+
+    col *= mask;
+    col *= 0.45 + 0.95 * F_RMS + 0.55 * beatPulse(4.0) * F_BPM_CONF
+         + 0.65 * F_ONSET * F_PERCUSSIVITY;
+
+    fragColor = vec4(col * uPaint * F_INTENSITY, 1.0);
+}
+`;
+// ===== END FILE =====
+
+// ===== FILE: shaders/fractal/julia_orbit.frag =====
+const SH_JULIA = `
+#include "common/features.glsl"
+#include "common/noise.glsl"
+#include "common/palette.glsl"
+
+// Julia set with c travelling a closed path. Path radius <- dynamics,
+// position along the path <- beat phase. Morphing c on the beat is the
+// classic mapping and still the best one.
+
+uniform float uIter;
+uniform float uEscape;
+uniform float uOrbitR;
+uniform float uBeatMorph;
+uniform float uTrapGain;
+uniform float uPaint;
+
+in vec2 vUv;
+out vec4 fragColor;
+
+void main() {
+    vec2 uv = vUv;
+    vec2 z = (uv - 0.5) * 2.0;
+    z.x *= F_ASPECT;
+    z *= 1.38 - 0.26 * F_SUB;
+    z = rot2(0.012 * F_TIME + 0.7 * F_STEREO_WIDTH) * z;
+
+    float ph = 6.28318531 * (F_BEAT_PHASE * uBeatMorph + F_TIME * 0.014);
+
+    // |c| is held near 0.79 — the boundary of the Mandelbrot set — because that
+    // is where the Julia set is a connected filigree. An orbit that wanders
+    // freely spends a good third of its time deep INSIDE the cardioid, where
+    // the set is solid: every point stays bounded, escape time saturates, and
+    // the frame goes black. Path radius still reads dynamics, position still
+    // reads beat phase; the radius is just bounded to the interesting annulus.
+    float R = clamp(0.58 + 0.75 * uOrbitR * (0.80 + 0.40 * F_DYNAMICS), 0.60, 0.88);
+    vec2 c = R * vec2(cos(ph), sin(ph * 1.06));
+
+    int N = int(clamp(uIter, 8.0, 160.0));
+    float i = 0.0, trap = 0.0, minr = 1e9;
+    for (int k = 0; k < 160; k++) {
+        if (k >= N) break;
+        z = vec2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
+        float r2 = dot(z, z);
+        trap += exp(-3.4 * abs(sqrt(r2) - 0.88));   // orbit trap -> filigree
+        minr = min(minr, r2);
+        if (r2 > uEscape * uEscape) break;
+        i += 1.0;
+    }
+
+    float sm    = i / float(N);
+    float trapN = trap / float(N);              // iteration-count independent
+    float inside = step(0.999, sm);
+    float t  = palSpiralT(uv, fract(sm * 2.1 + 0.30 * trapN + 0.18 * F_CENTROID));
+
+    vec3 col = palChroma(t) * (0.12 + 1.15 * pow(1.0 - sm, 2.4));
+    // The trap carries the interior: a connected Julia reads as lace instead of
+    // as a hole, so the look survives every position on the orbit.
+    col += palChroma(t + 0.13) * trapN * (0.35 + 0.75 * inside) * uTrapGain * (0.45 + F_HIMID);
+    col *= 0.55 + 0.65 * smoothstep(0.0, 0.30, sqrt(minr));
+
+    fragColor = vec4(col * uPaint * F_INTENSITY * (0.42 + 0.95 * F_RMS), 1.0);
+}
+`;
+// ===== END FILE =====
+
+// ===== FILE: shaders/fractal/apollonian.frag =====
+const SH_APOLLONIAN = `
+#include "common/features.glsl"
+#include "common/noise.glsl"
+#include "common/palette.glsl"
+
+// Apollonian gasket by inversive folding. Psychedelic lace, strongly
+// geometric — excellent contrast against warp_fbm's softness.
+
+uniform float uIter;
+uniform float uFold;
+uniform float uLine;
+uniform float uPaint;
+
+in vec2 vUv;
+out vec4 fragColor;
+
+void main() {
+    vec2 uv = vUv;
+    vec2 p = (uv - 0.5) * (2.7 - 0.35 * F_SUB);
+    p.x *= F_ASPECT;
+    p = rot2(0.018 * F_TIME + 0.35 * F_BAR_PHASE) * p;
+
+    float s = 1.0, k = 0.0;
+    int N = int(clamp(uIter * 0.22, 3.0, 22.0));
+    for (int i = 0; i < 22; i++) {
+        if (i >= N) break;
+        p = -1.0 + 2.0 * fract(0.5 * p + 0.5);
+        float r2 = max(dot(p, p), 1e-4);
+        float kk = (uFold * (1.0 + 0.35 * F_BASS)) / r2;
+        p *= kk;
+        s *= kk;
+        k += 1.0 / r2;
+    }
+
+    float d = abs(p.y) / max(s, 1e-4);
+    float lace = exp(-uLine * 130.0 * d);
+    float halo = exp(-uLine * 26.0 * d);
+
+    float t = palSpiralT(uv, fract(0.14 * log(1.0 + k) + 0.28 * F_CENTROID + 0.2 * F_KEY_HUE));
+    vec3 col = palChroma(t) * lace * (1.1 + 2.0 * F_HIMID);
+    col += palChroma(t + 0.28) * halo * 0.45;
+
+    fragColor = vec4(col * uPaint * F_INTENSITY * (0.35 + 1.0 * F_RMS), 1.0);
+}
+`;
+// ===== END FILE =====
+
+// ===== FILE: shaders/fractal/mandel_zoom.frag =====
+const SH_MANDEL = `
+#include "common/features.glsl"
+#include "common/noise.glsl"
+#include "common/palette.glsl"
+
+// Slow autonomous zoom with a HARD bounded depth and a period reset, so it
+// never leaves fp32 precision. No perturbation theory here on purpose.
+
+uniform float uIter;
+uniform float uEscape;
+uniform float uZoomPeriod;   // seconds per zoom cycle
+uniform float uZoomDepth;    // ln(max magnification)
+uniform float uPaint;
+
+in vec2 vUv;
+out vec4 fragColor;
+
+void main() {
+    vec2 uv = vUv;
+    float ph   = fract(F_TIME / max(uZoomPeriod, 8.0));
+    float zoom = exp(ph * clamp(uZoomDepth, 1.0, 9.0));
+    float fade = smoothstep(0.0, 0.07, ph) * smoothstep(0.0, 0.12, 1.0 - ph);
+
+    vec2 target = vec2(-0.743643887, 0.131825904);
+    vec2 c = (uv - 0.5) * 3.0;
+    c.x *= F_ASPECT;
+    c = rot2(0.05 * F_TIME * 0.1) * c / zoom + target;
+
+    vec2 z = vec2(0.0);
+    int N = int(clamp(uIter, 24.0, 200.0));
+    float i = 0.0;
+    for (int k = 0; k < 200; k++) {
+        if (k >= N) break;
+        z = vec2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
+        if (dot(z, z) > uEscape * uEscape) break;
+        i += 1.0;
+    }
+
+    float sm = i / float(N);
+    // escape-time coloured by the chroma vector: the pitch class the current
+    // band lands on picks the stop, so a key change recolours the shells.
+    int pc = int(mod(floor(sm * 24.0), 12.0));
+    float t = palSpiralT(uv, fract(sm * 3.1 + 0.30 * chroma(pc) + 0.16 * F_CENTROID));
+
+    vec3 col = palChroma(t) * (0.14 + 1.5 * pow(1.0 - sm, 2.6));
+    col += palChroma(t + 0.2) * pow(sm, 6.0) * 0.5 * F_BRILLIANCE;
+
+    fragColor = vec4(col * fade * uPaint * F_INTENSITY * (0.4 + 0.95 * F_RMS), 1.0);
+}
+`;
+// ===== END FILE =====
+
+// ===== FILE: shaders/motif/rose.frag =====
+const SH_ROSE = `
+#include "common/features.glsl"
+#include "common/noise.glsl"
+#include "common/sdf.glsl"
+#include "common/palette.glsl"
+
+// Phyllotaxis rose. Opens on chromaFlux spikes — chord changes bloom roses.
+// The single most legible music -> image mapping in the design, so it gets
+// real attention: a filled corolla, a drawn edge, and a golden-angle seed head.
+
+uniform float uGain;
+uniform float uPetals;
+uniform float uBloom;    // host-computed 0..1 envelope (attack on chromaFlux)
+uniform float uSeed;
+uniform float uPaint;
+
+in vec2 vUv;
+out vec4 fragColor;
+
+void main() {
+    float b = clamp(uBloom, 0.0, 1.0);
+    if (b <= 0.002 || uGain <= 0.001) { fragColor = vec4(0.0); return; }
+
+    vec2 p = vUv - 0.5;
+    p.x *= F_ASPECT;
+    // roses drift, they do not sit dead centre
+    p -= 0.16 * vec2(sin(uSeed * 3.1 + F_TIME * 0.05), cos(uSeed * 5.7 + F_TIME * 0.037));
+    p = rot2(0.10 * F_TIME + b * 0.75) * p;
+
+    float k = max(uPetals, 3.0);
+    float r = length(p);
+    float open = 0.055 + 0.34 * b;
+
+    float edge = sdPetal(p, k, open * (0.55 + 0.45 * b));
+    float body = smoothstep(0.045, -0.01, edge);
+    float line = exp(-140.0 * abs(edge));
+
+    // golden-angle seed head, only evaluated inside the corolla
+    float seeds = 0.0;
+    if (r < open * 1.15) {
+        for (int i = 0; i < 22; i++) {
+            float fi = float(i);
+            float ra = fi * 2.39996323;
+            float rr = sqrt(fi / 22.0) * open * 0.78;
+            vec2 sp = vec2(cos(ra), sin(ra)) * rr;
+            seeds += exp(-2600.0 * dot(p - sp, p - sp));
+        }
+    }
+
+    float t = palSpiralT(vUv, fract(0.58 + 0.22 * abs(cos(k * atan(p.y, p.x) * 0.5)) + 0.28 * F_KEY_HUE));
+    vec3 col = palChroma(t) * (body * 0.30 + line * 1.15)
+             + vec3(1.0, 0.88, 0.70) * seeds * 0.55;
+
+    col *= b * b * uGain * (0.6 + 0.7 * F_MID);
+    fragColor = vec4(col * uPaint * F_INTENSITY * 3.2, 1.0);
+}
+`;
+// ===== END FILE =====
+
+// ===== FILE: shaders/motif/bolt.frag =====
+const SH_BOLT = `
+#include "common/features.glsl"
+#include "common/noise.glsl"
+#include "common/sdf.glsl"
+#include "common/palette.glsl"
+
+// Forking lightning. Fires on strong onsets when percussivity is high, with a
+// fast bloom-heavy decay. Original geometry in the shared idiom — a forked
+// bolt is a genre motif, not a protected mark.
+
+uniform float uGain;
+uniform float uForkDepth;
+uniform float uImpulse;   // host-computed strike envelope 0..1
+uniform float uSeed;      // re-rolled per strike so no two bolts repeat
+uniform float uPaint;
+
+in vec2 vUv;
+out vec4 fragColor;
+
+void main() {
+    float im = clamp(uImpulse, 0.0, 1.0);
+    if (im <= 0.003 || uGain <= 0.001) { fragColor = vec4(0.0); return; }
+
+    vec2 p = vUv - 0.5;
+    p.x *= F_ASPECT;
+
+    float sd = 1e9;
+    int NF = int(clamp(uForkDepth, 1.0, 3.0));
+    float x0 = (hash11(uSeed * 1.11) - 0.5) * 0.7;
+    vec2 a = vec2(x0, 0.60);
+
+    for (int i = 0; i < 10; i++) {
+        float f = float(i + 1) / 10.0;
+        vec2 b = vec2(a.x + (hash11(uSeed + float(i) * 3.77) - 0.5) * 0.30,
+                      0.60 - f * 1.22);
+        sd = min(sd, sdSegment(p, a, b));
+
+        if (i > 0 && i < 9 && NF > 1 && hash11(uSeed + float(i) * 7.13) > 0.42) {
+            vec2 fb = b + vec2((hash11(uSeed + float(i) * 11.9) - 0.5) * 0.46,
+                               -0.20 * hash11(uSeed + float(i) * 5.51));
+            sd = min(sd, sdSegment(p, b, fb) * 1.4);
+            if (NF > 2 && hash11(uSeed + float(i) * 13.1) > 0.5) {
+                vec2 fc = fb + vec2((hash11(uSeed + float(i) * 17.3) - 0.5) * 0.30, -0.13);
+                sd = min(sd, sdSegment(p, fb, fc) * 2.0);
+            }
+        }
+        a = b;
+    }
+
+    float core = exp(-1100.0 * sd * sd);
+    float glow = exp(-38.0 * sd);
+    vec3 col = vec3(0.86, 0.94, 1.0) * core * 1.7
+             + palChroma(palSpiralT(vUv, 0.86)) * glow * 0.6;
+
+    float env = im * im * (0.4 + 0.9 * F_PERCUSSIVITY);
+    fragColor = vec4(col * env * uGain * uPaint * F_INTENSITY * 4.0, 1.0);
+}
+`;
+// ===== END FILE =====
+</script>
+
+<script>
+/* ==========================================================================
+   RIPPLE — shader registry, loader, GL engine.
+   ========================================================================== */
+'use strict';
+var RENDER_SCALE = 0.75;
+
+/* --- virtual shader filesystem. Keys are the authoritative paths from the
+   FILE: fences above; tools/extract-shaders.mjs writes exactly these. ----- */
+const SHADER_FS = {
+  'common/features.glsl'   : SH_FEATURES,
+  'common/noise.glsl'      : SH_NOISE,
+  'common/palette.glsl'    : SH_PALETTE,
+  'common/sdf.glsl'        : SH_SDF,
+  'common/safety.glsl'     : SH_SAFETY,
+  'fullscreen.vert'        : SH_FULLSCREEN_VERT,
+  'passes/warp.frag'       : SH_WARP,
+  'passes/bright.frag'     : SH_BRIGHT,
+  'passes/blur.frag'       : SH_BLUR,
+  'passes/composite.frag'  : SH_COMPOSITE,
+  'passes/particles.vert'  : SH_PARTICLES_VERT,
+  'passes/particles.frag'  : SH_PARTICLES_FRAG,
+  'fractal/warp_fbm.frag'  : SH_WARP_FBM,
+  'fractal/julia_orbit.frag': SH_JULIA,
+  'fractal/apollonian.frag': SH_APOLLONIAN,
+  'fractal/mandel_zoom.frag': SH_MANDEL,
+  'motif/rose.frag'        : SH_ROSE,
+  'motif/bolt.frag'        : SH_BOLT,
+};
+
+/* CONTRACTS §2 — the preamble. The native host injects its own; the shader
+   files themselves carry no #version line. */
+const PREAMBLE_VERT = '#version 300 es\nprecision highp float;\nprecision highp int;\n#define RIPPLE_WEBGL 1\n#line 1\n';
+const PREAMBLE_FRAG = '#version 300 es\nprecision highp float;\nprecision highp int;\n#define RIPPLE_WEBGL 1\n#line 1\n';
+
+/* CONTRACTS §2 — flat textual #include substitution with cycle detection.
+   Deliberately dumb: no conditionals, no macro expansion, no include guards
+   beyond "already pulled in this compilation unit". The native host must
+   implement exactly this. */
+const INCLUDE_RE = /^[ \t]*#include[ \t]+"([^"]+)"[ \t]*$/gm;
+
+function resolveIncludes(path, source, seen, stack) {
+  seen = seen || new Set();
+  stack = stack || [];
+  if (stack.indexOf(path) !== -1)
+    throw new Error('#include cycle: ' + stack.concat(path).join(' -> '));
+  stack = stack.concat(path);
+  return source.replace(INCLUDE_RE, (_, inc) => {
+    const src = SHADER_FS[inc];
+    if (src === undefined) throw new Error('#include not found: "' + inc + '" (from ' + path + ')');
+    if (seen.has(inc)) return '// #include "' + inc + '" (already resolved)';
+    seen.add(inc);
+    return '// ---- begin ' + inc + ' ----\n'
+         + resolveIncludes(inc, src, seen, stack)
+         + '\n// ---- end ' + inc + ' ----';
+  });
+}
+
+function loadShaderSource(path) {
+  const src = SHADER_FS[path];
+  if (src === undefined) throw new Error('no such shader: ' + path);
+  return resolveIncludes(path, src, new Set(), []);
+}
+
+/* ========================================================================== */
+/*  GL bootstrap                                                              */
+/* ========================================================================== */
+
+const cv = document.getElementById('gl');
+const gl = cv.getContext('webgl2', {
+  antialias: false, alpha: false, depth: false, stencil: false,
+  premultipliedAlpha: false, preserveDrawingBuffer: true,   // keeps Ctrl+Alt+S screenshots and canvas.toDataURL() working
+  powerPreference: 'low-power', desynchronized: true
+});
+
+const GLCAP = { float: false, floatLinear: false, ok: !!gl };
+if (gl) {
+  GLCAP.float = !!gl.getExtension('EXT_color_buffer_float');
+  GLCAP.floatLinear = !!gl.getExtension('OES_texture_float_linear');
+}
+
+function fatal(msg) {
+  const el = document.getElementById('glerr');
+  el.style.display = 'grid';
+  el.textContent = msg;
+  throw new Error(msg);
+}
+if (!gl) fatal('WebGL2 is unavailable in this browser.\nThe harness needs WebGL2 (uniform buffer objects, GLSL ES 300).');
+
+/* --- program compilation ------------------------------------------------- */
+
+function compileStage(type, path, src) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, (type === gl.VERTEX_SHADER ? PREAMBLE_VERT : PREAMBLE_FRAG) + src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    const log = gl.getShaderInfoLog(sh) || '';
+    const lines = src.split('\n');
+    const hit = /:(\d+):/.exec(log);
+    let ctx = '';
+    if (hit) {
+      const n = parseInt(hit[1], 10);
+      for (let i = Math.max(0, n - 4); i < Math.min(lines.length, n + 3); i++)
+        ctx += (i + 1 === n ? '>> ' : '   ') + (i + 1) + ' | ' + lines[i] + '\n';
+    }
+    fatal('shader compile failed: ' + path + '\n\n' + log + '\n' + ctx);
+  }
+  return sh;
+}
+
+const PROGS = {};
+function program(name, vsPath, fsPath) {
+  const vs = compileStage(gl.VERTEX_SHADER, vsPath, loadShaderSource(vsPath));
+  const fs = compileStage(gl.FRAGMENT_SHADER, fsPath, loadShaderSource(fsPath));
+  const p = gl.createProgram();
+  gl.attachShader(p, vs); gl.attachShader(p, fs);
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS))
+    fatal('link failed: ' + name + '\n' + gl.getProgramInfoLog(p));
+  gl.deleteShader(vs); gl.deleteShader(fs);
+
+  // CONTRACTS §1 — FeatureFrame at binding point 0. GLSL ES 300 has no
+  // `binding` layout qualifier, so the binding is established here instead.
+  const bi = gl.getUniformBlockIndex(p, 'FeatureFrame');
+  if (bi !== gl.INVALID_INDEX) gl.uniformBlockBinding(p, bi, 0);
+
+  const rec = { p, loc: {}, name };
+  PROGS[name] = rec;
+  return rec;
+}
+
+function use(rec) { gl.useProgram(rec.p); return rec; }
+function loc(rec, n) {
+  if (!(n in rec.loc)) rec.loc[n] = gl.getUniformLocation(rec.p, n);
+  return rec.loc[n];
+}
+function u1(rec, n, v) { const l = loc(rec, n); if (l) gl.uniform1f(l, v); }
+function u2(rec, n, a, b) { const l = loc(rec, n); if (l) gl.uniform2f(l, a, b); }
+function ui(rec, n, v) { const l = loc(rec, n); if (l) gl.uniform1i(l, v); }
+function uSet(rec, obj) { for (const k in obj) { const v = obj[k]; if (typeof v === 'number') u1(rec, k, v); } }
+
+/* --- the Feature Frame UBO: 56 floats = 224 bytes ----------------------- */
+
+const FEATURE_FLOATS = 56;
+const FEATURE_BYTES = FEATURE_FLOATS * 4;
+if (FEATURE_BYTES !== 224) fatal('Feature Frame must be 224 bytes, got ' + FEATURE_BYTES);
+
+const F = new Float32Array(FEATURE_FLOATS);
+const ubo = gl.createBuffer();
+gl.bindBuffer(gl.UNIFORM_BUFFER, ubo);
+gl.bufferData(gl.UNIFORM_BUFFER, FEATURE_BYTES, gl.DYNAMIC_DRAW);
+gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, ubo);
+
+function uploadFeatureFrame() {
+  F[52] = F[53] = F[54] = F[55] = 0;   // uReserved MUST be zero-filled
+  gl.bindBuffer(gl.UNIFORM_BUFFER, ubo);
+  gl.bufferSubData(gl.UNIFORM_BUFFER, 0, F);
+}
+
+/* --- Feature Frame field table. Single source of truth for the synthetic
+   driver, the timeline recorder and the diagnostic HUD. --------------------- */
+
+function fld(i, key, label, group, min, max, def, o) {
+  return Object.assign({ i, key, label, group, min, max, def, raw: false, approx: false, auto: false }, o || {});
+}
+const FIELDS = [
+  fld(0, 'time', 'time', 'TIME', 0, 1e6, 0, { raw: true, auto: true }),
+  fld(1, 'dt', 'dt', 'TIME', 0, 0.2, 0.016, { raw: true, auto: true }),
+  fld(2, 'trackPos', 'trackPos', 'TIME', 0, 3600, 0, { raw: true, auto: true }),
+  fld(3, 'trackFrac', 'trackFrac', 'TIME', 0, 1, 0),
+
+  fld(4, 'rms', 'rms', 'LEVEL', 0, 1, 0.38),
+  fld(5, 'peak', 'peak', 'LEVEL', 0, 1, 0.55),
+  fld(6, 'loudSlow', 'loudSlow', 'LEVEL', 0, 1, 0.42),
+  fld(7, 'dynamics', 'dynamics', 'LEVEL', 0, 1, 0.28),
+
+  fld(8, 'sub', 'sub 20-60', 'BANDS', 0, 1, 0.35),
+  fld(9, 'bass', 'bass 60-150', 'BANDS', 0, 1, 0.45),
+  fld(10, 'lowMid', 'lowMid .4k', 'BANDS', 0, 1, 0.40),
+  fld(11, 'mid', 'mid 1k', 'BANDS', 0, 1, 0.38),
+  fld(12, 'hiMid', 'hiMid 2.4k', 'BANDS', 0, 1, 0.34),
+  fld(13, 'presence', 'presence 5k', 'BANDS', 0, 1, 0.30),
+  fld(14, 'brilliance', 'brillian.10k', 'BANDS', 0, 1, 0.25),
+  fld(15, 'air', 'air 16k', 'BANDS', 0, 1, 0.20),
+
+  fld(16, 'flux', 'flux', 'RHYTHM', 0, 1, 0.14),
+  fld(17, 'onset', 'onset', 'RHYTHM', 0, 1, 0),
+  fld(18, 'beatPhase', 'beatPhase', 'RHYTHM', 0, 1, 0, { auto: true }),
+  fld(19, 'barPhase', 'barPhase', 'RHYTHM', 0, 1, 0, { auto: true }),
+
+  fld(20, 'bpm', 'bpm', 'TEMPO', 40, 200, 112, { raw: true, approx: true }),
+  fld(21, 'bpmConf', 'bpmConf', 'TEMPO', 0, 1, 0.72, { approx: true }),
+  fld(22, 'beatCount', 'beatCount', 'TEMPO', 0, 1e6, 0, { raw: true, auto: true }),
+  fld(23, 'percussivity', 'percussivity', 'TEMPO', 0, 1, 0.45, { approx: true }),
+
+  fld(24, 'ch0', 'C', 'CHROMA', 0, 1, 1.0, { approx: true }),
+  fld(25, 'ch1', 'C#', 'CHROMA', 0, 1, 0.18, { approx: true }),
+  fld(26, 'ch2', 'D', 'CHROMA', 0, 1, 0.42, { approx: true }),
+  fld(27, 'ch3', 'D#', 'CHROMA', 0, 1, 0.15, { approx: true }),
+  fld(28, 'ch4', 'E', 'CHROMA', 0, 1, 0.66, { approx: true }),
+  fld(29, 'ch5', 'F', 'CHROMA', 0, 1, 0.30, { approx: true }),
+  fld(30, 'ch6', 'F#', 'CHROMA', 0, 1, 0.12, { approx: true }),
+  fld(31, 'ch7', 'G', 'CHROMA', 0, 1, 0.72, { approx: true }),
+  fld(32, 'ch8', 'G#', 'CHROMA', 0, 1, 0.14, { approx: true }),
+  fld(33, 'ch9', 'A', 'CHROMA', 0, 1, 0.48, { approx: true }),
+  fld(34, 'ch10', 'A#', 'CHROMA', 0, 1, 0.16, { approx: true }),
+  fld(35, 'ch11', 'B', 'CHROMA', 0, 1, 0.35, { approx: true }),
+
+  fld(36, 'keyHue', 'keyHue', 'TONAL', 0, 1, 0.58, { approx: true }),
+  fld(37, 'keyConf', 'keyConf', 'TONAL', 0, 1, 0.62, { approx: true }),
+  fld(38, 'chromaFlux', 'chromaFlux', 'TONAL', 0, 1, 0.10),
+  fld(39, 'centroid', 'centroid', 'TONAL', 0, 1, 0.40),
+
+  fld(40, 'stereoWidth', 'stereoWidth', 'SPACE', 0, 1, 0.45),
+  fld(41, 'stereoBal', 'stereoBal', 'SPACE', -1, 1, 0, { raw: true }),
+  fld(42, 'novelty', 'novelty', 'SPACE', 0, 1, 0.10),
+  fld(43, 'sectionPhase', 'sectionPhase', 'SPACE', 0, 1, 0, { auto: true }),
+
+  fld(44, 'intensity', 'intensity', 'CTL', 0, 1, 0.92),
+  fld(45, 'era', 'eraId', 'CTL', 0, 7, 2, { raw: true }),
+  fld(46, 'songMode', 'songMode', 'CTL', 0, 32, 0, { raw: true }),
+  fld(47, 'paletteMix', 'paletteMix', 'CTL', 0, 1, 0),
+
+  fld(48, 'width', 'width', 'RES', 0, 8192, 0, { raw: true, auto: true }),
+  fld(49, 'height', 'height', 'RES', 0, 8192, 0, { raw: true, auto: true }),
+  fld(50, 'aspect', 'aspect', 'RES', 0, 8, 1.777, { raw: true, auto: true }),
+  fld(51, 'renderScale', 'renderScale', 'RES', 0.4, 1, 0.75, { raw: true, auto: true }),
+];
+const FIELD_BY_KEY = {};
+FIELDS.forEach(f => { FIELD_BY_KEY[f.key] = f; });
+const FIELD_ORDER = FIELDS.map(f => f.key).concat(['_r0', '_r1', '_r2', '_r3']);
+const GROUPS = ['TIME', 'LEVEL', 'BANDS', 'RHYTHM', 'TEMPO', 'CHROMA', 'TONAL', 'SPACE', 'CTL', 'RES'];
+
+/* ========================================================================== */
+/*  render targets                                                            */
+/* ========================================================================== */
+
+const RT = {
+  w: 0, h: 0, pw: 0, ph: 0, bw: 0, bh: 0,
+  ping: [null, null], pingFbo: [null, null], cur: 0,
+  bloom: [null, null], bloomFbo: [null, null],
+  final: null, finalFbo: null, mipFbo: null, mipLevels: 1,
+};
+
+function mkTex(w, h, internal, format, type, filter, mips) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, format, type, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, mips ? gl.LINEAR_MIPMAP_LINEAR : filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  if (mips) gl.generateMipmap(gl.TEXTURE_2D);
+  return t;
+}
+function mkFbo(tex, level) {
+  const f = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, level || 0);
+  return f;
+}
+function del(o) { if (!o) return; if (o instanceof WebGLTexture) gl.deleteTexture(o); else gl.deleteFramebuffer(o); }
+
+function allocTargets(w, h, scale) {
+  const HDR = GLCAP.float ? gl.RGBA16F : gl.RGBA8;
+  const HDRT = GLCAP.float ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE;
+  [].concat(RT.ping, RT.pingFbo, RT.bloom, RT.bloomFbo,
+            [RT.final, RT.finalFbo, RT.mipFbo]).forEach(del);
+
+  RT.w = w; RT.h = h;
+  RT.pw = Math.max(64, Math.round(w * scale));
+  RT.ph = Math.max(64, Math.round(h * scale));
+  RT.bw = Math.max(16, RT.pw >> 2);
+  RT.bh = Math.max(16, RT.ph >> 2);
+
+  for (let i = 0; i < 2; i++) {
+    RT.ping[i] = mkTex(RT.pw, RT.ph, HDR, gl.RGBA, HDRT, gl.LINEAR, false);
+    RT.pingFbo[i] = mkFbo(RT.ping[i]);
+    gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+    RT.bloom[i] = mkTex(RT.bw, RT.bh, HDR, gl.RGBA, HDRT, gl.LINEAR, false);
+    RT.bloomFbo[i] = mkFbo(RT.bloom[i]);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+  }
+
+  RT.final = mkTex(w, h, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, gl.LINEAR, true);
+  RT.finalFbo = mkFbo(RT.final, 0);
+
+  // Mean-luminance measurement for the safety loop rides the final buffer's
+  // own mip chain: generateMipmap, then read the 1x1 top level. 4 bytes of
+  // readback, no full-resolution stall.
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+
+/* --- palette LUT -------------------------------------------------------- */
+
+const palTex = gl.createTexture();
+const PAL_N = 256;
+const palData = new Uint8Array(PAL_N * 4);
+gl.bindTexture(gl.TEXTURE_2D, palTex);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, PAL_N, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, palData);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+function hex2rgb(h) {
+  h = String(h).replace('#', '').trim();
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  const n = parseInt(h, 16) || 0;
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function buildPalette(stops) {
+  const cols = (stops && stops.length ? stops : ['#000000', '#ffffff']).map(hex2rgb);
+  const n = cols.length;
+  for (let i = 0; i < PAL_N; i++) {
+    // wrap the ramp so palette rotation is continuous — a hard seam reads as
+    // a flash, which the safety limiter would then have to fight.
+    const t = (i / PAL_N) * n;
+    const a = Math.floor(t) % n, b = (a + 1) % n;
+    let k = t - Math.floor(t);
+    k = k * k * (3 - 2 * k);
+    for (let c = 0; c < 3; c++) {
+      // interpolate in a gamma-ish space; keeps mid-blends from going muddy
+      const ca = Math.pow(cols[a][c] / 255, 2.2), cb = Math.pow(cols[b][c] / 255, 2.2);
+      palData[i * 4 + c] = Math.round(255 * Math.pow(ca + (cb - ca) * k, 1 / 2.2));
+    }
+    palData[i * 4 + 3] = 255;
+  }
+  gl.bindTexture(gl.TEXTURE_2D, palTex);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, PAL_N, 1, gl.RGBA, gl.UNSIGNED_BYTE, palData);
+}
+
+/* --- particle buffer ---------------------------------------------------- */
+
+const PARTICLE_MAX = 64000;
+const partVao = gl.createVertexArray();
+{
+  const seeds = new Float32Array(PARTICLE_MAX * 2);
+  const idx = new Float32Array(PARTICLE_MAX);
+  for (let i = 0; i < PARTICLE_MAX; i++) {
+    seeds[i * 2] = Math.random(); seeds[i * 2 + 1] = Math.random(); idx[i] = i;
+  }
+  gl.bindVertexArray(partVao);
+  const b0 = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, b0);
+  gl.bufferData(gl.ARRAY_BUFFER, seeds, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  const b1 = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, b1);
+  gl.bufferData(gl.ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(1);
+  gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 0, 0);
+  gl.bindVertexArray(null);
+}
+
+/* --- programs ----------------------------------------------------------- */
+
+const FRACTALS = {
+  warp_fbm:    { prog: null, path: 'fractal/warp_fbm.frag',   label: 'warp_fbm' },
+  julia_orbit: { prog: null, path: 'fractal/julia_orbit.frag', label: 'julia_orbit' },
+  apollonian:  { prog: null, path: 'fractal/apollonian.frag',  label: 'apollonian' },
+  mandel_zoom: { prog: null, path: 'fractal/mandel_zoom.frag', label: 'mandel_zoom' },
+};
+// Families named in the spec but out of Phase 0 scope. Requests for these fall
+// back to warp_fbm and say so in the HUD rather than failing silently.
+const FRACTAL_STUBS = { kleinian: 'warp_fbm', ifs_flame: 'warp_fbm', mandelbulb: 'warp_fbm' };
+
+const P = {};
+function buildPrograms() {
+  P.warp = program('warp', 'fullscreen.vert', 'passes/warp.frag');
+  P.bright = program('bright', 'fullscreen.vert', 'passes/bright.frag');
+  P.blur = program('blur', 'fullscreen.vert', 'passes/blur.frag');
+  P.comp = program('composite', 'fullscreen.vert', 'passes/composite.frag');
+  P.rose = program('rose', 'fullscreen.vert', 'motif/rose.frag');
+  P.bolt = program('bolt', 'fullscreen.vert', 'motif/bolt.frag');
+  P.part = program('particles', 'passes/particles.vert', 'passes/particles.frag');
+  for (const k in FRACTALS) FRACTALS[k].prog = program(k, 'fullscreen.vert', FRACTALS[k].path);
+}
+buildPrograms();
+
+function tri() { gl.drawArrays(gl.TRIANGLES, 0, 3); }
+function bindTex(unit, tex) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tex); }
+function target(fbo, w, h) { gl.bindFramebuffer(gl.FRAMEBUFFER, fbo); gl.viewport(0, 0, w, h); }
+</script>
+
+<script>
+/* ==========================================================================
+   RIPPLE — presets (schema §10), recursive merge, feature->parameter router.
+   ========================================================================== */
+
+/* Additive, v1-compatible extensions. Every key below is a NEW optional key;
+   the eight era presets load byte-unchanged and pick these up as defaults.
+   Documented in harness/README.md so the native host applies the same table. */
+const PRESET_DEFAULTS = {
+  schemaVersion: 1,
+  fractal: 'warp_fbm',
+  palette: { stops: ['#0A0710', '#3D2B56', '#6B4C93', '#C9A8E0'], chromaBlend: 0.3, rotateByKey: true, spiral: 0.35 },
+  feedback: {
+    decay: 0.985, zoom: 1.0035, rotate: 0.0015, warpAmount: 0.38, warpScale: 2.2, bassGain: 1.15,
+    symmetry: 0.0, paintGain: 0.095, centerPull: 0.5, onsetDecay: 0.6
+  },
+  fractalParams: {
+    iterations: 88, escapeRadius: 4.0, orbitRadius: 0.26, beatMorph: 0.55,
+    warp: 3.4, scale: 2.6, flow: 0.16, cells: 4.6, rim: 1.6, iridescence: 0.55,
+    mask: 0.0, octaves: 5, rimWidth: 2.4, trapGain: 1.0, zoomPeriod: 42, zoomDepth: 7.0,
+    fold: 1.0, line: 1.0
+  },
+  motifs: {
+    bolt: { gain: 0.8, threshold: 0.55, forkDepth: 3 },
+    rose: { gain: 1.0, chromaFluxThreshold: 0.4, petals: 13 },
+    glyph: { gain: 0.2, atlas: 'default', emitOn: 'novelty' }
+  },
+  particles: { count: 24000, curlScale: 1.8, emitBand: 5, lifetime: 3.2, size: 2.6, rise: 0.0 },
+  post: { bloomThreshold: 0.40, bloomGain: 0.55, bloomTaps: 2, bloomKnee: 0.30, grain: 0.03, vignette: 0.25, exposure: 1.0, saturation: 1.7 },
+  mapping: {
+    sub: 'feedbackZoom', bass: 'warpAmount', lowMid: 'fractalIterations', mid: 'motifOpacity',
+    presence: 'particleEmit', air: 'grain', stereoWidth: 'symmetry', keyHue: 'paletteRotate',
+    novelty: 'fractalMorph', percussivity: 'motifGain'
+  },
+  safety: { maxLuminanceDelta: 0.08, maxBrightness: 0.85 }
+};
+
+function isObj(v) { return v && typeof v === 'object' && !Array.isArray(v); }
+/* CONTRACTS §4 — every key in an override is PARTIAL. Recursive dictionary
+   merge, never a replace. */
+function mergeDeep(base, over) {
+  const out = Array.isArray(base) ? base.slice() : Object.assign({}, base);
+  if (!isObj(over)) return out;
+  for (const k in over) {
+    if (isObj(over[k]) && isObj(out[k])) out[k] = mergeDeep(out[k], over[k]);
+    else if (Array.isArray(over[k])) out[k] = over[k].slice();
+    else out[k] = over[k];
+  }
+  return out;
+}
+
+/* --- the eight era presets, verbatim from presets/eras/*.json ------------- */
+const ERA_PRESETS = [
+{"schemaVersion":1,"id":"era-primal","name":"1965-67 Primal","eraId":0,"fractal":"warp_fbm","palette":{"stops":["#1A0033","#FF2D95","#FFE800","#00E5FF"],"chromaBlend":0.42,"rotateByKey":true},"feedback":{"decay":0.955,"zoom":1.008,"rotate":0.004,"warpAmount":0.55,"warpScale":3.4,"bassGain":1.5},"fractalParams":{"iterations":64,"escapeRadius":4.0,"orbitRadius":0.34,"beatMorph":0.85},"motifs":{"bolt":{"gain":1.1,"threshold":0.55,"forkDepth":3},"rose":{"gain":0.4,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.15,"atlas":"default","emitOn":"novelty"}},"particles":{"count":18000,"curlScale":2.6,"emitBand":5,"lifetime":2.0},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}},
+{"schemaVersion":1,"id":"era-live-dead","name":"1968-70 Live/Dead","eraId":1,"fractal":"warp_fbm","palette":{"stops":["#2B1A14","#8C2F1E","#C9762B","#E8D5A3"],"chromaBlend":0.3,"rotateByKey":true},"feedback":{"decay":0.978,"zoom":1.003,"rotate":0.001,"warpAmount":0.42,"warpScale":1.9,"bassGain":1.1},"fractalParams":{"iterations":72,"escapeRadius":4.0,"orbitRadius":0.22,"beatMorph":0.4},"motifs":{"bolt":{"gain":0.55,"threshold":0.55,"forkDepth":3},"rose":{"gain":0.7,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.2,"atlas":"default","emitOn":"novelty"}},"particles":{"count":16000,"curlScale":1.4,"emitBand":4,"lifetime":3.6},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}},
+{"schemaVersion":1,"id":"era-europe72","name":"1971-74 Europe '72","eraId":2,"fractal":"julia_orbit","palette":{"stops":["#0E1729","#4A7FC1","#8B6FD4","#D9E4F5"],"chromaBlend":0.35,"rotateByKey":true},"feedback":{"decay":0.985,"zoom":1.004,"rotate":0.0015,"warpAmount":0.35,"warpScale":2.4,"bassGain":1.2},"fractalParams":{"iterations":96,"escapeRadius":4.0,"orbitRadius":0.28,"beatMorph":0.6},"motifs":{"bolt":{"gain":0.8,"threshold":0.55,"forkDepth":3},"rose":{"gain":1.0,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.2,"atlas":"default","emitOn":"novelty"}},"particles":{"count":24000,"curlScale":1.8,"emitBand":5,"lifetime":3.2},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}},
+{"schemaVersion":1,"id":"era-terrapin","name":"1976-79 Terrapin","eraId":3,"fractal":"warp_fbm","palette":{"stops":["#1F2419","#2E8B84","#E8A33D","#F2E3C4"],"chromaBlend":0.33,"rotateByKey":true},"feedback":{"decay":0.982,"zoom":1.0035,"rotate":0.0012,"warpAmount":0.38,"warpScale":2.1,"bassGain":1.15},"fractalParams":{"iterations":88,"escapeRadius":4.0,"orbitRadius":0.26,"beatMorph":0.55},"motifs":{"bolt":{"gain":0.7,"threshold":0.55,"forkDepth":3},"rose":{"gain":1.35,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.45,"atlas":"default","emitOn":"novelty"}},"particles":{"count":22000,"curlScale":1.6,"emitBand":4,"lifetime":3.4},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}},
+{"schemaVersion":1,"id":"era-brent","name":"1980-86 Brent","eraId":4,"fractal":"apollonian","palette":{"stops":["#050508","#00FF9C","#FF3D6E","#FFD400"],"chromaBlend":0.4,"rotateByKey":true},"feedback":{"decay":0.968,"zoom":1.006,"rotate":0.0028,"warpAmount":0.48,"warpScale":2.9,"bassGain":1.35},"fractalParams":{"iterations":80,"escapeRadius":4.0,"orbitRadius":0.3,"beatMorph":0.75},"motifs":{"bolt":{"gain":1.25,"threshold":0.55,"forkDepth":3},"rose":{"gain":0.6,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.25,"atlas":"default","emitOn":"novelty"}},"particles":{"count":26000,"curlScale":2.2,"emitBand":6,"lifetime":2.4},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}},
+{"schemaVersion":1,"id":"era-in-the-dark","name":"1987-90 In the Dark","eraId":5,"fractal":"julia_orbit","palette":{"stops":["#12061F","#7B2FBE","#00B8D4","#FF6B35"],"chromaBlend":0.36,"rotateByKey":true},"feedback":{"decay":0.988,"zoom":1.0035,"rotate":0.0016,"warpAmount":0.4,"warpScale":2.5,"bassGain":1.25},"fractalParams":{"iterations":104,"escapeRadius":4.0,"orbitRadius":0.31,"beatMorph":0.62},"motifs":{"bolt":{"gain":0.85,"threshold":0.55,"forkDepth":3},"rose":{"gain":0.95,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.28,"atlas":"default","emitOn":"novelty"}},"particles":{"count":34000,"curlScale":1.9,"emitBand":5,"lifetime":3.8},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}},
+{"schemaVersion":1,"id":"era-final","name":"1991-95 Final Years","eraId":6,"fractal":"warp_fbm","palette":{"stops":["#0A0710","#3D2B56","#6B4C93","#C9A8E0"],"chromaBlend":0.28,"rotateByKey":true},"feedback":{"decay":0.993,"zoom":1.0022,"rotate":0.0008,"warpAmount":0.3,"warpScale":1.7,"bassGain":1.05},"fractalParams":{"iterations":96,"escapeRadius":4.0,"orbitRadius":0.2,"beatMorph":0.35},"motifs":{"bolt":{"gain":0.5,"threshold":0.55,"forkDepth":3},"rose":{"gain":0.8,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.22,"atlas":"default","emitOn":"novelty"}},"particles":{"count":28000,"curlScale":1.2,"emitBand":4,"lifetime":4.6},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}},
+{"schemaVersion":1,"id":"era-unknown","name":"Unknown / Studio","eraId":7,"fractal":"warp_fbm","palette":{"stops":["#0B0D10","#2F4858","#86BBD8","#F6AE2D"],"chromaBlend":0.55,"rotateByKey":true},"feedback":{"decay":0.983,"zoom":1.0035,"rotate":0.0014,"warpAmount":0.38,"warpScale":2.2,"bassGain":1.15},"fractalParams":{"iterations":88,"escapeRadius":4.0,"orbitRadius":0.25,"beatMorph":0.5},"motifs":{"bolt":{"gain":0.75,"threshold":0.55,"forkDepth":3},"rose":{"gain":0.85,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.1,"atlas":"default","emitOn":"novelty"}},"particles":{"count":20000,"curlScale":1.7,"emitBand":5,"lifetime":3.2},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}}
+];
+
+/* --- presets authored HERE, tuned against the real pipeline --------------- */
+const AUTHORED_PRESETS = [
+{"schemaVersion":1,"id":"oil-wheel","name":"Oil Wheel (hero)","eraId":7,"fractal":"warp_fbm",
+ "palette":{"stops":["#04030A","#2A0B4A","#C21E6B","#FF7A2F","#FFE39A","#F0662A","#5B1A57","#0B1E3A","#123E63","#050810"],"chromaBlend":0.30,"rotateByKey":true,"spiral":0.10},
+ "feedback":{"decay":0.988,"zoom":1.0026,"rotate":0.0010,"warpAmount":0.46,"warpScale":1.9,"bassGain":1.25,"symmetry":0.0,"paintGain":0.105,"centerPull":0.7,"onsetDecay":0.7},
+ "fractalParams":{"iterations":88,"escapeRadius":4.0,"orbitRadius":0.26,"beatMorph":0.5,"warp":3.4,"scale":2.8,"flow":0.16,"cells":5.2,"rim":1.65,"rimWidth":2.2,"iridescence":0.55,"mask":0.0,"octaves":5},
+ "motifs":{"bolt":{"gain":0.45,"threshold":0.62,"forkDepth":2},"rose":{"gain":0.95,"chromaFluxThreshold":0.38,"petals":11},"glyph":{"gain":0.0,"atlas":"default","emitOn":"novelty"}},
+ "particles":{"count":18000,"curlScale":1.35,"emitBand":5,"lifetime":4.2,"size":2.2,"rise":0.05},
+ "post":{"bloomThreshold":0.36,"bloomGain":0.55,"bloomTaps":2,"bloomKnee":0.30,"grain":0.024,"vignette":0.34,"exposure":1.43,"saturation":1.55},
+ "mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalMorph","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"none","keyHue":"paletteRotate","novelty":"feedbackDecay","percussivity":"motifGain"},
+ "safety":{"maxLuminanceDelta":0.075,"maxBrightness":0.84}},
+
+{"schemaVersion":1,"id":"fillmore-poster","name":"Fillmore Poster","eraId":0,"fractal":"warp_fbm",
+ "palette":{"stops":["#120018","#FF1F6B","#FFD400","#00D9C0","#2B0140"],"chromaBlend":0.44,"rotateByKey":true,"spiral":0.72},
+ "feedback":{"decay":0.9735,"zoom":1.0062,"rotate":0.0031,"warpAmount":0.60,"warpScale":3.1,"bassGain":1.45,"symmetry":0.62,"paintGain":0.118,"centerPull":0.3,"onsetDecay":1.0},
+ "fractalParams":{"iterations":64,"escapeRadius":4.0,"orbitRadius":0.34,"beatMorph":0.85,"warp":3.2,"scale":2.7,"flow":0.24,"cells":4.4,"rim":1.15,"iridescence":0.30,"mask":-0.22,"octaves":4},
+ "motifs":{"bolt":{"gain":1.15,"threshold":0.50,"forkDepth":3},"rose":{"gain":0.55,"chromaFluxThreshold":0.42,"petals":17},"glyph":{"gain":0.0,"atlas":"default","emitOn":"novelty"}},
+ "particles":{"count":22000,"curlScale":2.6,"emitBand":6,"lifetime":1.9,"size":2.0,"rise":0.0},
+ "post":{"bloomThreshold":0.66,"bloomGain":0.48,"bloomTaps":2,"bloomKnee":0.30,"grain":0.045,"vignette":0.22,"exposure":0.67,"saturation":1.5},
+ "mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain"},
+ "safety":{"maxLuminanceDelta":0.065,"maxBrightness":0.80}},
+
+{"schemaVersion":1,"id":"dark-star-drift","name":"Dark Star Drift","eraId":6,"fractal":"warp_fbm",
+ "palette":{"stops":["#01030A","#0B2340","#2E6E8E","#8FD6D0","#E8F4EF"],"chromaBlend":0.30,"rotateByKey":true,"spiral":0.10},
+ "feedback":{"decay":0.9955,"zoom":1.0016,"rotate":0.0005,"warpAmount":0.26,"warpScale":1.35,"bassGain":0.95,"symmetry":0.0,"paintGain":0.155,"centerPull":1.0,"onsetDecay":0.25},
+ "fractalParams":{"iterations":96,"escapeRadius":4.0,"orbitRadius":0.18,"beatMorph":0.25,"warp":4.8,"scale":1.35,"flow":0.062,"cells":1.9,"rim":1.55,"iridescence":0.88,"mask":0.02,"octaves":6},
+ "motifs":{"bolt":{"gain":0.18,"threshold":0.72,"forkDepth":2},"rose":{"gain":0.70,"chromaFluxThreshold":0.30,"petals":8},"glyph":{"gain":0.0,"atlas":"default","emitOn":"novelty"}},
+ "particles":{"count":26000,"curlScale":1.05,"emitBand":4,"lifetime":6.5,"size":1.8,"rise":0.0},
+ "post":{"bloomThreshold":0.52,"bloomGain":0.80,"bloomTaps":3,"bloomKnee":0.46,"grain":0.018,"vignette":0.40,"exposure":0.77,"saturation":1.85},
+ "mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalMorph","mid":"none","presence":"particleEmit","air":"grain","stereoWidth":"none","keyHue":"paletteRotate","novelty":"feedbackDecay","percussivity":"motifGain"},
+ "safety":{"maxLuminanceDelta":0.055,"maxBrightness":0.82}},
+
+{"schemaVersion":1,"id":"scarlet-lace","name":"Scarlet Lace","eraId":3,"fractal":"apollonian",
+ "palette":{"stops":["#0A0503","#5B1206","#D8541A","#F5B942","#FFF0C9"],"chromaBlend":0.30,"rotateByKey":true,"spiral":0.40},
+ "feedback":{"decay":0.9805,"zoom":1.0042,"rotate":0.0019,"warpAmount":0.40,"warpScale":2.35,"bassGain":1.30,"symmetry":0.0,"paintGain":0.098,"centerPull":0.5,"onsetDecay":0.8},
+ "fractalParams":{"iterations":84,"escapeRadius":4.0,"orbitRadius":0.26,"beatMorph":0.6,"warp":3.4,"scale":2.3,"flow":0.15,"cells":3.2,"rim":1.0,"iridescence":0.5,"mask":0.0,"octaves":5,"fold":1.06,"line":0.82},
+ "motifs":{"bolt":{"gain":0.60,"threshold":0.58,"forkDepth":3},"rose":{"gain":1.55,"chromaFluxThreshold":0.32,"petals":13},"glyph":{"gain":0.0,"atlas":"default","emitOn":"novelty"}},
+ "particles":{"count":20000,"curlScale":1.7,"emitBand":5,"lifetime":3.0,"size":2.4,"rise":0.35},
+ "post":{"bloomThreshold":0.64,"bloomGain":0.56,"bloomTaps":2,"bloomKnee":0.34,"grain":0.030,"vignette":0.26,"exposure":0.79,"saturation":1.5},
+ "mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain"},
+ "safety":{"maxLuminanceDelta":0.07,"maxBrightness":0.84}},
+
+{"schemaVersion":1,"id":"beam-julia","name":"Beam Julia","eraId":2,"fractal":"julia_orbit",
+ "palette":{"stops":["#04060F","#153A6B","#5C7BD9","#B39BE8","#EAF0FF"],"chromaBlend":0.34,"rotateByKey":true,"spiral":0.18},
+ "feedback":{"decay":0.9905,"zoom":1.0030,"rotate":0.0013,"warpAmount":0.33,"warpScale":2.1,"bassGain":1.20,"symmetry":0.55,"paintGain":0.104,"centerPull":0.6,"onsetDecay":0.5},
+ "fractalParams":{"iterations":104,"escapeRadius":3.6,"orbitRadius":0.30,"beatMorph":0.72,"warp":3.4,"scale":2.3,"flow":0.15,"cells":3.2,"rim":1.0,"iridescence":0.5,"mask":0.0,"octaves":5,"trapGain":1.45},
+ "motifs":{"bolt":{"gain":0.70,"threshold":0.55,"forkDepth":3},"rose":{"gain":1.10,"chromaFluxThreshold":0.36,"petals":13},"glyph":{"gain":0.0,"atlas":"default","emitOn":"novelty"}},
+ "particles":{"count":30000,"curlScale":1.9,"emitBand":5,"lifetime":3.6,"size":2.2,"rise":0.0},
+ "post":{"bloomThreshold":0.58,"bloomGain":0.70,"bloomTaps":3,"bloomKnee":0.38,"grain":0.022,"vignette":0.30,"exposure":0.66,"saturation":1.9},
+ "mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain"},
+ "safety":{"maxLuminanceDelta":0.07,"maxBrightness":0.85}}
+];
+
+/* --- song modes (data/songs.json subset) — exercises the recursive merge --- */
+const SONG_MODES = {
+  '(none)': null,
+  'dark star': { fractal: 'mandel_zoom', feedback: { decay: 0.995 }, tempoLock: false, intensityScale: 0.9 },
+  'space': { fractal: 'kleinian', feedback: { decay: 0.998 }, tempoLock: false, motifs: { glyph: { gain: 0.05 } } },
+  'drums': { fractal: 'ifs_flame', tempoLock: true, percussiveGain: 2.0, particles: { count: 48000 } },
+  'terrapin station': { fractal: 'warp_fbm', motifs: { rose: { gain: 1.6 } } },
+  'fire on the mountain': { palette: { stops: ['#140803', '#7A1F0A', '#E8551F', '#FFC24A'] }, particles: { rise: 1.0, count: 30000 } },
+  'st stephen': { fractal: 'julia_orbit', motifs: { rose: { gain: 1.5, chromaFluxThreshold: 0.32 } }, bloomOnChordChange: 1.5 },
+  'china cat sunflower': { fractal: 'apollonian', palette: { stops: ['#1A0033', '#FFE800', '#00E5FF', '#FF2D95'] } },
+  'eyes of the world': { fractal: 'warp_fbm', feedback: { rotate: 0.004, warpScale: 1.6 }, palette: { chromaBlend: 0.5 } },
+  'ripple': { fractal: 'warp_fbm', feedback: { decay: 0.99, warpAmount: 0.22 }, intensityScale: 0.7 },
+  'morning dew': { fractal: 'warp_fbm', feedback: { decay: 0.994, warpAmount: 0.2 }, intensityScale: 0.75 }
+};
+
+const LIBRARY = AUTHORED_PRESETS.concat(ERA_PRESETS);
+
+/* --- resolved preset + feature->parameter router ------------------------- */
+
+const ST = {
+  presetIdx: 0,
+  song: '(none)',
+  base: null,       // preset as authored (era + song merge, before feature routing)
+  live: null,       // editable working copy shown in the panel
+};
+
+/* Persistent draw state. Rewritten in place every frame — no per-frame
+   allocation, mirroring the native host's zero-Gen0 requirement. */
+const D = {
+  decay: 0, zoom: 0, rotate: 0, warpAmount: 0, warpScale: 0, bassGain: 0,
+  symmetry: 0, paint: 0, centerPull: 0, onsetDecay: 0,
+  iterations: 0, escapeRadius: 0, orbitRadius: 0, beatMorph: 0,
+  warp: 0, scale: 0, flow: 0, cells: 0, rim: 0, iridescence: 0, mask: 0, octaves: 5, rimWidth: 2.4,
+  trapGain: 1, zoomPeriod: 42, zoomDepth: 7, fold: 1, line: 1,
+  boltGain: 0, boltThreshold: 0, boltFork: 3,
+  roseGain: 0, roseThreshold: 0, rosePetals: 13,
+  motifOpacity: 1, motifGain: 1,
+  pCount: 0, pCurl: 0, pLife: 0, pSize: 0, pEmit: 1, pRise: 0,
+  bloomThreshold: 0, bloomGain: 0, bloomTaps: 2, bloomKnee: 0.35,
+  grain: 0, vignette: 0, exposure: 1, saturate: 1.3,
+  palRot: 0, chromaBlend: 0, spiral: 0,
+  maxLumDelta: 0.08, maxBright: 0.85,
+  fractal: 'warp_fbm'
+};
+
+function resetDraw(p) {
+  const fb = p.feedback, fp = p.fractalParams, m = p.motifs, pa = p.particles, po = p.post, pl = p.palette;
+  D.decay = fb.decay; D.zoom = fb.zoom; D.rotate = fb.rotate;
+  D.warpAmount = fb.warpAmount; D.warpScale = fb.warpScale; D.bassGain = fb.bassGain;
+  D.symmetry = fb.symmetry; D.centerPull = fb.centerPull; D.onsetDecay = fb.onsetDecay;
+  D.iterations = fp.iterations; D.escapeRadius = fp.escapeRadius;
+  D.orbitRadius = fp.orbitRadius; D.beatMorph = fp.beatMorph;
+  D.warp = fp.warp; D.scale = fp.scale; D.flow = fp.flow; D.cells = fp.cells;
+  D.rim = fp.rim; D.iridescence = fp.iridescence; D.mask = fp.mask; D.octaves = fp.octaves;
+  D.rimWidth = fp.rimWidth;
+  D.trapGain = fp.trapGain; D.zoomPeriod = fp.zoomPeriod; D.zoomDepth = fp.zoomDepth;
+  D.fold = fp.fold; D.line = fp.line;
+  D.boltGain = m.bolt.gain; D.boltThreshold = m.bolt.threshold; D.boltFork = m.bolt.forkDepth;
+  D.roseGain = m.rose.gain; D.roseThreshold = m.rose.chromaFluxThreshold; D.rosePetals = m.rose.petals;
+  D.motifOpacity = 1; D.motifGain = 1;
+  D.pCount = pa.count; D.pCurl = pa.curlScale; D.pLife = pa.lifetime; D.pSize = pa.size;
+  D.pEmit = 1; D.pRise = pa.rise;
+  D.bloomThreshold = po.bloomThreshold; D.bloomGain = po.bloomGain;
+  D.bloomTaps = po.bloomTaps; D.bloomKnee = po.bloomKnee;
+  D.grain = po.grain; D.vignette = po.vignette; D.exposure = po.exposure;
+  D.saturate = po.saturation;
+  D.chromaBlend = pl.chromaBlend; D.spiral = pl.spiral;
+  // §12: a preset may be stricter than the limiter floor, never looser.
+  D.maxLumDelta = Math.min(p.safety.maxLuminanceDelta, 0.12);
+  D.maxBright = Math.min(p.safety.maxBrightness, 0.92);
+  D.fractal = p.fractal;
+  // paintGain is normalized by (1 - decay) so that changing decay does not
+  // change exposure: the feedback buffer's equilibrium is paint/(1-decay), so
+  // folding (1-decay) into the paint cancels it. Equilibrium ~= paintGain * 30.
+  D.paint = fb.paintGain * (1 - Math.min(fb.decay, 0.9995)) * 30;
+}
+
+/* The mapping block of §10 is DATA, not code: this table is the whole
+   feature->parameter routing surface. New looks come from editing JSON. */
+const MAP_TARGETS = {
+  none:              function () {},
+  feedbackZoom:      function (v) { D.zoom += v * 0.0055; },
+  feedbackDecay:     function (v) { D.decay = Math.min(0.9995, D.decay + v * 0.006); },
+  warpAmount:        function (v) { D.warpAmount *= 0.45 + 1.15 * v; },
+  warpScale:         function (v) { D.warpScale *= 0.7 + 0.6 * v; },
+  fractalIterations: function (v) { D.iterations *= 0.62 + 0.66 * v; },
+  fractalMorph:      function (v) { D.beatMorph *= 0.6 + 0.9 * v; D.cells *= 0.75 + 0.6 * v; },
+  motifOpacity:      function (v) { D.motifOpacity *= 0.35 + 1.1 * v; },
+  motifGain:         function (v) { D.motifGain *= 0.4 + 1.3 * v; },
+  particleEmit:      function (v) { D.pEmit *= 0.25 + 1.5 * v; },
+  grain:             function (v) { D.grain *= 0.4 + 1.6 * v; },
+  symmetry:          function (v) { D.symmetry = Math.max(D.symmetry, v); },
+  paletteRotate:     function (v) { D.palRot += v; },
+  bloomGain:         function (v) { D.bloomGain *= 0.5 + 1.2 * v; },
+  exposure:          function (v) { D.exposure *= 0.7 + 0.6 * v; },
+  rotate:            function (v) { D.rotate *= 0.4 + 1.4 * v; },
+};
+const MAP_TARGET_NAMES = Object.keys(MAP_TARGETS);
+const MAP_SOURCES = ['sub', 'bass', 'lowMid', 'mid', 'hiMid', 'presence', 'brilliance', 'air',
+  'rms', 'dynamics', 'flux', 'percussivity', 'stereoWidth', 'keyHue', 'novelty', 'centroid', 'chromaFlux'];
+
+function applyMapping(map) {
+  for (const src in map) {
+    const tgt = MAP_TARGETS[map[src]];
+    const f = FIELD_BY_KEY[src];
+    if (!tgt || !f) continue;
+    tgt(F[f.i]);
+  }
+}
+
+function resolvePreset() {
+  let p = mergeDeep(PRESET_DEFAULTS, LIBRARY[ST.presetIdx]);
+  const sm = SONG_MODES[ST.song];
+  if (sm) p = mergeDeep(p, sm);   // CONTRACTS §4 merge order
+  ST.base = p;
+  ST.live = mergeDeep(p, {});
+  buildPalette(ST.live.palette.stops);
+  F[45] = ST.live.eraId != null ? ST.live.eraId : 7;
+  return ST.live;
+}
+</script>
+
+<script>
+/* ==========================================================================
+   RIPPLE — feature sources.
+
+   (a) SYNTH  synthetic feature driver: slider + LFO per Feature Frame field.
+              THE primary mode. Decoupling look-tuning from audio work is the
+              entire point of the harness.
+   (b) MIC    live microphone.
+   (c) FILE   uploaded audio file.
+   (d) REPLAY a recorded feature timeline, for cross-host parity.
+
+   Plan §7.1 (adaptive per-band normalization) and §7.2 (spectral-flux onsets)
+   are implemented FAITHFULLY, because a divergence there would invalidate
+   every preset tuned here. Tempo autocorrelation, 24-template key detection
+   and HPSS percussivity are deliberately NOT implemented in Phase 0 — they
+   are approximated and flagged with a ~ in the panel.
+   ========================================================================== */
+
+const LFO_SHAPES = ['sine', 'tri', 'saw', 'sqr', 'rnd'];
+
+const SYN = {};   // key -> { v, lfo:{ on, rate, depth, shape, seed } }
+FIELDS.forEach(f => {
+  SYN[f.key] = { v: f.def, lfo: { on: false, rate: 0.12, depth: 0.35, shape: 'sine', seed: Math.random() * 100 } };
+});
+
+/* A default LFO set, so the harness is already alive on load rather than a
+   still frame that has to be poked into motion. */
+function seedDefaultLfos() {
+  const set = (k, rate, depth, shape) => {
+    const s = SYN[k]; s.lfo.on = true; s.lfo.rate = rate; s.lfo.depth = depth; s.lfo.shape = shape || 'sine';
+  };
+  set('sub', 0.09, 0.55); set('bass', 0.23, 0.60); set('lowMid', 0.17, 0.42);
+  set('mid', 0.13, 0.38); set('hiMid', 0.31, 0.40); set('presence', 0.41, 0.45, 'rnd');
+  set('brilliance', 0.55, 0.40, 'rnd'); set('air', 0.07, 0.30);
+  set('rms', 0.05, 0.30); set('dynamics', 0.11, 0.45);
+  set('stereoWidth', 0.037, 0.60); set('centroid', 0.083, 0.40);
+  set('keyHue', 0.008, 0.30, 'saw'); set('flux', 0.29, 0.5, 'rnd');
+}
+seedDefaultLfos();
+
+const SYNTH = { autoRhythm: true, running: true, jamAmount: 1.0 };
+
+function lfoValue(l, t) {
+  const ph = t * l.rate + l.seed;
+  switch (l.shape) {
+    case 'tri': return 4 * Math.abs(((ph % 1) + 1) % 1 - 0.5) - 1;
+    case 'saw': return 2 * (((ph % 1) + 1) % 1) - 1;
+    case 'sqr': return (((ph % 1) + 1) % 1) < 0.5 ? -1 : 1;
+    case 'rnd': {
+      const i = Math.floor(ph), k = ph - i;
+      const h = s => { const x = Math.sin(s * 127.1 + l.seed * 311.7) * 43758.5453; return 2 * (x - Math.floor(x)) - 1; };
+      const s = k * k * (3 - 2 * k);
+      return h(i) * (1 - s) + h(i + 1) * s;
+    }
+    default: return Math.sin(ph * 6.283185307);
+  }
+}
+
+/* --- rhythm accumulator (§7.3, phase-locked; autocorrelation out of scope) - */
+const RH = { phase: 0, bar: 0, beats: 0, lastOnset: -9, onsetEnv: 0, sectionPhase: 0 };
+
+function advanceRhythm(dt, bpm, conf, onsetImpulse) {
+  if (conf >= 0.35) {
+    const inc = dt * bpm / 60;
+    RH.phase += inc;
+    // nudge toward the nearest boundary on an onset, gain 0.08 — a reset here
+    // produces visible jitter, which is why this is an accumulator.
+    if (onsetImpulse > 0.85) {
+      const d = RH.phase - Math.round(RH.phase);
+      if (Math.abs(d) < 0.25) RH.phase -= d * 0.08;
+    }
+    while (RH.phase >= 1) { RH.phase -= 1; RH.beats++; RH.bar = (RH.bar + 1) % 4; }
+  } else {
+    // Free-time fallback: drive beat phase from the decaying onset impulse.
+    // This is what makes Drums -> Space work instead of insisting on a grid.
+    RH.phase = 1 - onsetImpulse;
+  }
+  RH.sectionPhase = (RH.sectionPhase + dt / 45) % 1;
+}
+
+/* ========================================================================== */
+/*  audio analysis                                                            */
+/* ========================================================================== */
+
+const A = {
+  ctx: null, mode: 'synth', analyserL: null, analyserR: null, gainNode: null,
+  srcNode: null, mediaEl: null, stream: null, fft: 2048, bins: 0, sr: 48000,
+  freqL: null, freqR: null, timeL: null, timeR: null,
+  mag: null, prevMag: null, band: null, env: null, hi: null, lo: null,
+  fluxHist: null, fluxIdx: 0, chroma: null, chromaEma: null,
+  bandEma: null, loudEma: 0, lastOnsetT: -9, onsetEnv: 0, status: 'idle', err: ''
+};
+const BAND_EDGES = [20, 60, 150, 400, 1000, 2400, 5000, 10000, 16000];
+
+function initAudioGraph() {
+  if (A.ctx) return A.ctx;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  A.ctx = new AC({ latencyHint: 'interactive' });
+  A.sr = A.ctx.sampleRate;
+  A.bins = A.fft / 2;
+  const mk = () => {
+    const an = A.ctx.createAnalyser();
+    an.fftSize = A.fft;
+    an.smoothingTimeConstant = 0;   // §7.1's envelopes are the ONLY smoothing
+    an.minDecibels = -110; an.maxDecibels = 0;
+    return an;
+  };
+  A.analyserL = mk(); A.analyserR = mk();
+  A.split = A.ctx.createChannelSplitter(2);
+  A.split.connect(A.analyserL, 0);
+  A.split.connect(A.analyserR, 1);
+  A.gainNode = A.ctx.createGain();
+  A.gainNode.gain.value = 1;
+  A.gainNode.connect(A.split);
+
+  A.freqL = new Float32Array(A.bins); A.freqR = new Float32Array(A.bins);
+  A.timeL = new Float32Array(A.fft); A.timeR = new Float32Array(A.fft);
+  A.mag = new Float32Array(A.bins); A.prevMag = new Float32Array(A.bins);
+  A.band = new Float32Array(8);
+  A.env = new Float32Array(8).fill(-90);
+  A.hi = new Float32Array(8).fill(-40);
+  A.lo = new Float32Array(8).fill(-90);
+  A.fluxHist = new Float32Array(43);
+  A.chroma = new Float32Array(12);
+  A.chromaEma = new Float32Array(12);
+  A.bandEma = new Float32Array(8);
+  return A.ctx;
+}
+
+function median43(arr) {
+  const t = Array.prototype.slice.call(arr);
+  t.sort((a, b) => a - b);
+  return t[21];
+}
+
+function analyzeAudio(dt, tNow) {
+  const an = A.analyserL;
+  if (!an) return;
+  an.getFloatFrequencyData(A.freqL);
+  A.analyserR.getFloatFrequencyData(A.freqR);
+  an.getFloatTimeDomainData(A.timeL);
+  A.analyserR.getFloatTimeDomainData(A.timeR);
+
+  const binHz = A.sr / A.fft;   // derived from the ACTUAL sample rate
+
+  // dB -> linear magnitude, summed L+R
+  let magSum = 0, wSum = 0, cSum = 0;
+  for (let k = 0; k < A.bins; k++) {
+    const m = (Math.pow(10, A.freqL[k] / 20) + Math.pow(10, A.freqR[k] / 20)) * 0.5;
+    A.mag[k] = m;
+    magSum += m;
+    const f = k * binHz;
+    wSum += m * f; cSum += m;
+  }
+
+  /* ---- §7.1 eight perceptual bands with adaptive normalization ---------- */
+  const atk = 1 - Math.exp(-dt / 0.010);
+  const rel = 1 - Math.exp(-dt / 0.250);
+  const kHi = 1 - Math.exp(-dt / 3.0);
+  const kLo = 1 - Math.exp(-dt / 8.0);
+  for (let b = 0; b < 8; b++) {
+    const k0 = Math.max(1, Math.floor(BAND_EDGES[b] / binHz));
+    const k1 = Math.min(A.bins - 1, Math.ceil(BAND_EDGES[b + 1] / binHz));
+    let E = 0, n = 0;
+    for (let k = k0; k <= k1; k++) { E += A.mag[k] * A.mag[k]; n++; }
+    E /= Math.max(n, 1);
+    const dB = 10 * Math.log10(E + 1e-12);
+    A.env[b] = A.env[b] + (dB - A.env[b]) * (dB > A.env[b] ? atk : rel);
+    A.hi[b] = dB > A.hi[b] ? dB : A.hi[b] + (dB - A.hi[b]) * kHi;
+    A.lo[b] = dB < A.lo[b] ? dB : A.lo[b] + (dB - A.lo[b]) * kLo;
+    A.band[b] = Math.min(1, Math.max(0, (A.env[b] - A.lo[b]) / Math.max(A.hi[b] - A.lo[b], 6.0)));
+  }
+
+  /* ---- §7.2 spectral flux + adaptive peak-pick ------------------------- */
+  const kFluxLo = Math.max(1, Math.floor(40 / binHz));
+  const kFluxHi = Math.min(A.bins - 1, Math.ceil(8000 / binHz));
+  let flux = 0, den = 1e-9, fHi = 0, fLo = 0;
+  for (let k = kFluxLo; k <= kFluxHi; k++) {
+    const d = A.mag[k] - A.prevMag[k];
+    if (d > 0) { flux += d; if (k * binHz > 2000) fHi += d; else fLo += d; }
+    den += A.mag[k];
+  }
+  flux /= den;
+  A.prevMag.set(A.mag);
+
+  A.fluxHist[A.fluxIdx] = flux;
+  A.fluxIdx = (A.fluxIdx + 1) % 43;
+  const thr = median43(A.fluxHist) * 1.4 + 0.02;
+  let impulse = A.onsetEnv * Math.exp(-dt / 0.150);
+  if (flux > thr && tNow - A.lastOnsetT > 0.050) { impulse = 1; A.lastOnsetT = tNow; }
+  A.onsetEnv = impulse;
+
+  /* ---- §7.5 stereo width via mid/side ---------------------------------- */
+  let mAcc = 0, sAcc = 0, pk = 0;
+  for (let i = 0; i < A.fft; i++) {
+    const L = A.timeL[i], R = A.timeR[i];
+    const M = (L + R) * 0.5, S = (L - R) * 0.5;
+    mAcc += M * M; sAcc += S * S;
+    const a = Math.abs(M); if (a > pk) pk = a;
+  }
+  const rmsM = Math.sqrt(mAcc / A.fft), rmsS = Math.sqrt(sAcc / A.fft);
+  const width = rmsS / (rmsM + rmsS + 1e-9);
+  const bal = Math.max(-1, Math.min(1, (Math.sqrt(mAcc) - Math.sqrt(sAcc)) * 0 +
+    (function () { let l = 0, r = 0; for (let i = 0; i < A.fft; i++) { l += A.timeL[i] * A.timeL[i]; r += A.timeR[i] * A.timeR[i]; } return (Math.sqrt(r) - Math.sqrt(l)) / (Math.sqrt(r) + Math.sqrt(l) + 1e-9); })()));
+
+  const rms = Math.min(1, rmsM * 3.2);
+  const peak = Math.min(1, pk * 1.6);
+  A.loudEma += (rms - A.loudEma) * (1 - Math.exp(-dt / 3.0));
+
+  /* ---- APPROX: chroma / key. §7.4's 24-template correlation is Phase 2. -- */
+  A.chroma.fill(0);
+  const kC0 = Math.max(1, Math.floor(55 / binHz));
+  const kC1 = Math.min(A.bins - 1, Math.ceil(5000 / binHz));
+  for (let k = kC0; k <= kC1; k++) {
+    const f = k * binHz;
+    const pc = ((Math.round(12 * Math.log2(f / 440)) % 12) + 12) % 12;
+    A.chroma[pc] += A.mag[k] / (1 + f / 1400);      // log-frequency taper
+  }
+  let cMax = 1e-9;
+  for (let i = 0; i < 12; i++) cMax = Math.max(cMax, A.chroma[i]);
+  let best = 0, second = 0, bestI = 0;
+  for (let i = 0; i < 12; i++) {
+    A.chroma[i] /= cMax;
+    if (A.chroma[i] > best) { second = best; best = A.chroma[i]; bestI = i; }
+    else if (A.chroma[i] > second) second = A.chroma[i];
+  }
+  const keyHue = ((bestI * 7) % 12) / 12;           // circle of fifths (§7.4)
+  const keyConf = Math.min(1, Math.max(0, (best - second) * 2.2));
+  let cflux = 0;
+  const kEma = 1 - Math.exp(-dt / 0.5);
+  for (let i = 0; i < 12; i++) {
+    cflux += Math.abs(A.chroma[i] - A.chromaEma[i]);
+    A.chromaEma[i] += (A.chroma[i] - A.chromaEma[i]) * kEma;
+  }
+  cflux = Math.min(1, cflux / 4.0);
+
+  /* ---- novelty: cosine distance of the band vector vs its 8 s EMA ------- */
+  let dot = 0, na = 0, nb = 0;
+  const kN = 1 - Math.exp(-dt / 8.0);
+  for (let b = 0; b < 8; b++) {
+    dot += A.band[b] * A.bandEma[b];
+    na += A.band[b] * A.band[b]; nb += A.bandEma[b] * A.bandEma[b];
+    A.bandEma[b] += (A.band[b] - A.bandEma[b]) * kN;
+  }
+  const novelty = Math.min(1, Math.max(0, 1 - dot / (Math.sqrt(na * nb) + 1e-9)) * 2.4);
+
+  /* ---- APPROX: percussivity. HPSS median filtering is Phase 2. ---------- */
+  const perc = Math.min(1, (fHi / (fHi + fLo + 1e-9)) * 1.35);
+
+  const centroidHz = wSum / (cSum + 1e-9);
+  const centroid = Math.min(1, Math.max(0, Math.log2(Math.max(centroidHz, 55) / 55) / Math.log2(16000 / 55)));
+
+  return {
+    band: A.band, rms, peak, loud: A.loudEma, dyn: Math.max(0, peak - rms),
+    flux: Math.min(1, flux * 6), onset: impulse, width, bal,
+    chroma: A.chroma, keyHue, keyConf, cflux, novelty, perc, centroid
+  };
+}
+
+/* --- source switching ---------------------------------------------------- */
+
+function stopSource() {
+  if (A.stream) { A.stream.getTracks().forEach(t => t.stop()); A.stream = null; }
+  if (A.srcNode) { try { A.srcNode.disconnect(); } catch (e) {} A.srcNode = null; }
+  if (A.mediaEl) { A.mediaEl.pause(); A.mediaEl = null; }
+}
+
+async function useMic() {
+  initAudioGraph();
+  stopSource();
+  try {
+    await A.ctx.resume();
+    A.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    });
+    A.srcNode = A.ctx.createMediaStreamSource(A.stream);
+    A.srcNode.connect(A.gainNode);
+    A.mode = 'mic'; A.status = 'mic live'; A.err = '';
+  } catch (e) {
+    A.mode = 'synth'; A.status = 'mic denied'; A.err = String(e.message || e);
+  }
+  syncSourceUi();
+}
+
+async function useFile(file) {
+  initAudioGraph();
+  stopSource();
+  await A.ctx.resume();
+  const el = new Audio();
+  el.src = URL.createObjectURL(file);
+  el.loop = true; el.crossOrigin = 'anonymous';
+  A.mediaEl = el;
+  A.srcNode = A.ctx.createMediaElementSource(el);
+  A.srcNode.connect(A.gainNode);
+  A.gainNode.connect(A.ctx.destination);   // monitor file playback
+  try { await el.play(); } catch (e) { A.err = String(e.message || e); }
+  A.mode = 'file'; A.status = file.name.slice(0, 34);
+  syncSourceUi();
+}
+
+function useSynth() { stopSource(); A.mode = 'synth'; A.status = 'synthetic driver'; syncSourceUi(); }
+
+/* ========================================================================== */
+/*  feature timeline recorder / player — makes Phase 1's parity gate real     */
+/* ========================================================================== */
+
+const TL = {
+  rec: false, frames: [], rate: 60, seconds: 20, t0: 0, acc: 0,
+  play: false, data: null, pt: 0, name: ''
+};
+
+function tlStart(seconds, rate) {
+  TL.seconds = seconds; TL.rate = rate;
+  TL.frames = []; TL.acc = 0; TL.rec = true; TL.t0 = performance.now() / 1000;
+}
+function tlStop() { TL.rec = false; }
+function tlCapture(dt) {
+  if (!TL.rec) return;
+  TL.acc += dt;
+  const step = 1 / TL.rate;
+  if (TL.acc + 1e-6 < step) return;
+  TL.acc -= step;
+  const row = new Array(FEATURE_FLOATS);
+  for (let i = 0; i < FEATURE_FLOATS; i++) row[i] = Math.round(F[i] * 1e5) / 1e5;
+  TL.frames.push(row);
+  if (TL.frames.length >= Math.round(TL.seconds * TL.rate)) TL.rec = false;
+}
+function tlExport() {
+  return {
+    schemaVersion: 1,
+    kind: 'ripple-feature-timeline',
+    generator: 'ripple-harness/0.1',
+    recorded: new Date().toISOString(),
+    rate: TL.rate,
+    seconds: +(TL.frames.length / TL.rate).toFixed(3),
+    frameBytes: FEATURE_BYTES,
+    note: 'frames[i] is the 56-float std140 FeatureFrame in declaration order. '
+        + 'Replay one row per frame, upload verbatim, and both hosts see an '
+        + 'identical timeline (plan §15 phase 1 gate).',
+    fieldOrder: FIELD_ORDER,
+    frames: TL.frames
+  };
+}
+function tlLoad(json) {
+  if (!json || json.kind !== 'ripple-feature-timeline' || !Array.isArray(json.frames))
+    throw new Error('not a ripple feature timeline');
+  if (json.frames.length && json.frames[0].length !== FEATURE_FLOATS)
+    throw new Error('frame width ' + json.frames[0].length + ', expected ' + FEATURE_FLOATS);
+  TL.data = json; TL.pt = 0; TL.play = true;
+}
+function tlTick(dt) {
+  if (!TL.play || !TL.data) return false;
+  const n = TL.data.frames.length;
+  if (!n) return false;
+  TL.pt += dt * TL.data.rate;
+  if (TL.pt >= n) TL.pt -= n;
+  const i0 = Math.floor(TL.pt) % n, i1 = (i0 + 1) % n, k = TL.pt - Math.floor(TL.pt);
+  const a = TL.data.frames[i0], b = TL.data.frames[i1];
+  for (let i = 0; i < FEATURE_FLOATS; i++) F[i] = a[i] + (b[i] - a[i]) * k;
+  return true;
+}
+
+function download(name, obj) {
+  const blob = new Blob([typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2)],
+    { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 400);
+}
+</script>
+
+<script>
+/* ==========================================================================
+   RIPPLE — control panel.
+
+   Lab instrumentation, not a web app: 9-11px monospace, 17px rows, one accent
+   colour, no rounded corners, no shadows, no animation. Everything is a
+   labelled readout next to the thing that changes it. The entire aesthetic
+   budget belongs to the canvas.
+   ========================================================================== */
+
+const pbody = document.getElementById('pbody');
+const hudEl = document.getElementById('hud');
+let bandMeters = [], chromaMeters = [], driverRows = {};
+let scaleSlider = null, scaleNum = null, govKv = null;
+const BIND = [];   // controls bound to ST.live, refreshed on preset change
+resolvePreset();   // ST.live must exist before any control binds to it
+
+function E(tag, cls, txt) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (txt != null) n.textContent = txt;
+  return n;
+}
+function getPath(o, p) { return p.split('.').reduce((a, k) => (a == null ? a : a[k]), o); }
+function setPath(o, p, v) {
+  const ks = p.split('.'); let t = o;
+  for (let i = 0; i < ks.length - 1; i++) t = t[ks[i]];
+  t[ks[ks.length - 1]] = v;
+}
+function fmt(v, d) { return (v == null || isNaN(v)) ? '--' : v.toFixed(d == null ? 2 : d); }
+
+function section(title, tagText, open) {
+  const s = E('div', 'sec' + (open ? ' open' : ''));
+  const h = E('h3');
+  const cv = E('span', 'cv', open ? '\u25be' : '\u25b8');
+  h.appendChild(cv);
+  h.appendChild(E('span', null, title));
+  if (tagText) h.appendChild(E('span', 'tag', tagText));
+  const b = E('div', 'body');
+  h.onclick = () => { s.classList.toggle('open'); cv.textContent = s.classList.contains('open') ? '\u25be' : '\u25b8'; };
+  s.appendChild(h); s.appendChild(b); pbody.appendChild(s);
+  return b;
+}
+function glabel(p, t) { p.appendChild(E('div', 'glabel', t)); return p; }
+
+/* slider row bound to a dotted path inside ST.live */
+function ctl(parent, label, path, min, max, step, dec, onChange) {
+  const r = E('div', 'row');
+  r.appendChild(E('label', null, label));
+  const s = E('input'); s.type = 'range'; s.min = min; s.max = max; s.step = step;
+  const n = E('div', 'num');
+  r.appendChild(s); r.appendChild(n);
+  const read = () => { const v = +getPath(ST.live, path); s.value = v; n.textContent = fmt(v, dec); };
+  s.oninput = () => {
+    setPath(ST.live, path, +s.value);
+    n.textContent = fmt(+s.value, dec);
+    if (onChange) onChange(+s.value);
+  };
+  parent.appendChild(r);
+  BIND.push(read); read();
+  return { row: r, slider: s, num: n, read };
+}
+function selRow(parent, label, options, get, set) {
+  const r = E('div', 'row wide');
+  r.appendChild(E('label', null, label));
+  const sel = E('select');
+  options.forEach(o => {
+    const op = E('option', null, typeof o === 'string' ? o : o.label);
+    op.value = typeof o === 'string' ? o : o.value;
+    sel.appendChild(op);
+  });
+  sel.onchange = () => set(sel.value);
+  r.appendChild(sel);
+  parent.appendChild(r);
+  const read = () => { sel.value = get(); };
+  BIND.push(read); read();
+  return sel;
+}
+function btn(parent, text, fn, title) {
+  const b = E('button', 'xbtn', text);
+  if (title) b.title = title;
+  b.onclick = fn; parent.appendChild(b); return b;
+}
+function kv(parent, label) {
+  const r = E('div', 'kv');
+  r.appendChild(E('span', null, label));
+  const b = E('b', null, '--');
+  r.appendChild(b); parent.appendChild(r); return b;
+}
+function hint(parent, html) { const d = E('div', 'hint'); d.innerHTML = html; parent.appendChild(d); return d; }
+
+/* ========================================================================== */
+/*  1. SOURCE                                                                 */
+/* ========================================================================== */
+let srcButtons = {}, srcStatus, fileInput;
+{
+  const b = section('SOURCE', 'input mode', true);
+  const br = E('div', 'btnrow');
+  srcButtons.synth = btn(br, 'SYNTH', () => useSynth(), 'synthetic feature driver (primary)');
+  srcButtons.mic = btn(br, 'MIC', () => useMic());
+  srcButtons.file = btn(br, 'FILE', () => fileInput.click());
+  srcButtons.replay = btn(br, 'REPLAY', () => { if (TL.data) { TL.play = !TL.play; syncSourceUi(); } else toast('no timeline loaded'); });
+  b.appendChild(br);
+  fileInput = E('input'); fileInput.type = 'file'; fileInput.accept = 'audio/*';
+  fileInput.style.display = 'none';
+  fileInput.onchange = e => { if (e.target.files[0]) useFile(e.target.files[0]); };
+  b.appendChild(fileInput);
+  srcStatus = kv(b, 'status');
+  const gr = E('div', 'row');
+  gr.appendChild(E('label', null, 'input gain'));
+  const gs = E('input'); gs.type = 'range'; gs.min = 0; gs.max = 4; gs.step = 0.05; gs.value = 1;
+  const gn = E('div', 'num', '1.00');
+  gs.oninput = () => { gn.textContent = fmt(+gs.value); if (A.gainNode) A.gainNode.gain.value = +gs.value; };
+  gr.appendChild(gs); gr.appendChild(gn); b.appendChild(gr);
+  hint(b, 'Fields marked <b>~</b> are approximated in Phase 0: tempo autocorrelation, '
+        + '24-template key detection and HPSS percussivity are Phase 2 work. '
+        + '§7.1 band normalization and §7.2 flux onsets are implemented faithfully — '
+        + 'those two must not diverge or every preset tuned here will look wrong on the native host.');
+}
+function syncSourceUi() {
+  for (const k in srcButtons) srcButtons[k].classList.remove('on');
+  const m = TL.play ? 'replay' : A.mode;
+  if (srcButtons[m]) srcButtons[m].classList.add('on');
+  srcStatus.textContent = TL.play ? ('timeline ' + (TL.data ? TL.data.frames.length : 0) + 'f') : (A.status || 'synthetic driver');
+  srcStatus.className = A.err ? 'bad' : '';
+  document.getElementById('sSrc').textContent = m.toUpperCase();
+}
+
+/* ========================================================================== */
+/*  2. PRESET                                                                 */
+/* ========================================================================== */
+let presetSel, songSel, fracSel, nameIn, idIn;
+{
+  const b = section('PRESET', 'schema v1', true);
+  presetSel = selRow(b, 'preset', LIBRARY.map((p, i) => ({ label: p.name, value: String(i) })),
+    () => String(ST.presetIdx), v => { ST.presetIdx = +v; applyPreset(); });
+  songSel = selRow(b, 'song mode', Object.keys(SONG_MODES), () => ST.song, v => { ST.song = v; applyPreset(); });
+  fracSel = selRow(b, 'fractal',
+    Object.keys(FRACTALS).concat(Object.keys(FRACTAL_STUBS).map(k => k + '  (\u2192 warp_fbm)')),
+    () => ST.live.fractal, v => { ST.live.fractal = v.split('  ')[0]; });
+  const r = E('div', 'row wide'); r.appendChild(E('label', null, 'name'));
+  nameIn = E('input'); nameIn.type = 'text';
+  nameIn.oninput = () => { ST.live.name = nameIn.value; };
+  r.appendChild(nameIn); b.appendChild(r);
+  const r2 = E('div', 'row wide'); r2.appendChild(E('label', null, 'id'));
+  idIn = E('input'); idIn.type = 'text';
+  idIn.oninput = () => { ST.live.id = idIn.value; };
+  r2.appendChild(idIn); b.appendChild(r2);
+  BIND.push(() => { nameIn.value = ST.live.name || ''; idIn.value = ST.live.id || ''; });
+
+  const br = E('div', 'btnrow');
+  btn(br, 'EXPORT JSON', () => download((ST.live.id || 'preset') + '.json', ST.live));
+  btn(br, 'IMPORT', () => presetFile.click());
+  btn(br, 'REVERT', () => { ST.live = mergeDeep(ST.base, {}); buildPalette(ST.live.palette.stops); refresh(); });
+  btn(br, 'COPY', () => {
+    navigator.clipboard && navigator.clipboard.writeText(JSON.stringify(ST.live, null, 2));
+    toast('preset JSON copied');
+  });
+  b.appendChild(br);
+  var presetFile = E('input'); presetFile.type = 'file'; presetFile.accept = '.json,application/json';
+  presetFile.style.display = 'none';
+  presetFile.onchange = e => {
+    const f = e.target.files[0]; if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      try {
+        const j = JSON.parse(rd.result);
+        if (j.kind === 'ripple-feature-timeline') { tlLoad(j); syncSourceUi(); toast('timeline loaded'); return; }
+        LIBRARY.push(mergeDeep(PRESET_DEFAULTS, j));
+        rebuildPresetList();
+        ST.presetIdx = LIBRARY.length - 1;
+        applyPreset();
+        toast('preset loaded');
+      } catch (err) { toast('bad JSON: ' + err.message); }
+    };
+    rd.readAsText(f);
+  };
+  b.appendChild(presetFile);
+}
+function rebuildPresetList() {
+  presetSel.innerHTML = '';
+  LIBRARY.forEach((p, i) => { const o = E('option', null, p.name); o.value = String(i); presetSel.appendChild(o); });
+}
+
+/* ========================================================================== */
+/*  3. FEEDBACK — the highest-value-per-cost block in the system              */
+/* ========================================================================== */
+{
+  const b = section('FEEDBACK', 'MilkDrop core', true);
+  ctl(b, 'decay', 'feedback.decay', 0.90, 0.9995, 0.0005, 4);
+  ctl(b, 'paintGain', 'feedback.paintGain', 0.005, 0.60, 0.005, 3);
+  ctl(b, 'zoom', 'feedback.zoom', 0.995, 1.015, 0.0002, 4);
+  ctl(b, 'rotate', 'feedback.rotate', -0.008, 0.008, 0.0001, 4);
+  ctl(b, 'warpAmount', 'feedback.warpAmount', 0, 1.2, 0.01, 2);
+  ctl(b, 'warpScale', 'feedback.warpScale', 0.4, 6, 0.05, 2);
+  ctl(b, 'bassGain', 'feedback.bassGain', 0, 3, 0.05, 2);
+  ctl(b, 'symmetry', 'feedback.symmetry', 0, 1, 0.01, 2);
+  ctl(b, 'centerPull', 'feedback.centerPull', 0, 3, 0.05, 2);
+  ctl(b, 'onsetDecay', 'feedback.onsetDecay', 0, 2, 0.05, 2);
+  hint(b, 'Decay is the single most important number here. Long decay gives the '
+        + 'trailing, self-similar quality that reads as psychedelic rather than as '
+        + 'an audio meter. <b>paintGain is normalized by (1-decay)</b>, so moving '
+        + 'decay changes the look without changing exposure.');
+}
+
+/* ========================================================================== */
+/*  4. FRACTAL                                                                */
+/* ========================================================================== */
+{
+  const b = section('FRACTAL PARAMS', 'per family', true);
+  glabel(b, 'WARP_FBM \u00b7 HERO');
+  ctl(b, 'warp', 'fractalParams.warp', 0, 8, 0.05, 2);
+  ctl(b, 'scale', 'fractalParams.scale', 0.4, 6, 0.05, 2);
+  ctl(b, 'flow', 'fractalParams.flow', 0, 0.6, 0.005, 3);
+  ctl(b, 'cells', 'fractalParams.cells', 0.6, 9, 0.05, 2);
+  ctl(b, 'rim', 'fractalParams.rim', 0, 3, 0.05, 2);
+  ctl(b, 'rimWidth px', 'fractalParams.rimWidth', 0.5, 8, 0.1, 1);
+  ctl(b, 'iridescence', 'fractalParams.iridescence', 0, 1, 0.01, 2);
+  ctl(b, 'mask bias', 'fractalParams.mask', -0.6, 0.6, 0.01, 2);
+  ctl(b, 'octaves', 'fractalParams.octaves', 2, 6, 1, 0);
+  glabel(b, 'ESCAPE-TIME FAMILIES');
+  ctl(b, 'iterations', 'fractalParams.iterations', 16, 160, 1, 0);
+  ctl(b, 'escapeRadius', 'fractalParams.escapeRadius', 1.5, 8, 0.1, 1);
+  ctl(b, 'orbitRadius', 'fractalParams.orbitRadius', 0, 0.7, 0.005, 3);
+  ctl(b, 'beatMorph', 'fractalParams.beatMorph', 0, 1.5, 0.01, 2);
+  ctl(b, 'trapGain', 'fractalParams.trapGain', 0, 3, 0.05, 2);
+  glabel(b, 'APOLLONIAN / MANDEL');
+  ctl(b, 'fold', 'fractalParams.fold', 0.8, 1.4, 0.005, 3);
+  ctl(b, 'line', 'fractalParams.line', 0.2, 3, 0.02, 2);
+  ctl(b, 'zoomPeriod', 'fractalParams.zoomPeriod', 10, 180, 1, 0);
+  ctl(b, 'zoomDepth', 'fractalParams.zoomDepth', 1, 9, 0.1, 1);
+}
+
+/* ========================================================================== */
+/*  5. PALETTE                                                                */
+/* ========================================================================== */
+let stopWrap;
+{
+  const b = section('PALETTE', '', false);
+  stopWrap = E('div');
+  b.appendChild(stopWrap);
+  const br = E('div', 'btnrow');
+  btn(br, '+ STOP', () => {
+    if (ST.live.palette.stops.length < 12) {
+      ST.live.palette.stops.push('#ffffff');
+      buildStops(); buildPalette(ST.live.palette.stops);
+    }
+  });
+  btn(br, '\u2212 STOP', () => {
+    if (ST.live.palette.stops.length > 2) {
+      ST.live.palette.stops.pop(); buildStops(); buildPalette(ST.live.palette.stops);
+    }
+  });
+  b.appendChild(br);
+  ctl(b, 'chromaBlend', 'palette.chromaBlend', 0, 1, 0.01, 2);
+  ctl(b, 'spiral', 'palette.spiral', 0, 1.5, 0.01, 2);
+  const r = E('div', 'row wide');
+  r.appendChild(E('label', null, 'rotateByKey'));
+  const cb = E('input'); cb.type = 'checkbox';
+  cb.style.width = '13px'; cb.style.height = '13px'; cb.style.accentColor = '#e8b34a';
+  cb.onchange = () => { ST.live.palette.rotateByKey = cb.checked; };
+  r.appendChild(cb); b.appendChild(r);
+  BIND.push(() => { cb.checked = !!ST.live.palette.rotateByKey; });
+  hint(b, 'The tie-dye spiral is applied to the palette <b>lookup</b>, never to '
+        + 'geometry — cheap, and it does more for period authenticity than any '
+        + 'amount of mesh.');
+}
+function buildStops() {
+  stopWrap.innerHTML = '';
+  ST.live.palette.stops.forEach((s, i) => {
+    const r = E('div', 'row wide');
+    r.appendChild(E('label', null, 'stop ' + i));
+    const c = E('input'); c.type = 'color'; c.value = s;
+    c.oninput = () => { ST.live.palette.stops[i] = c.value; buildPalette(ST.live.palette.stops); };
+    r.appendChild(c); stopWrap.appendChild(r);
+  });
+}
+
+/* ========================================================================== */
+/*  6. MOTIFS                                                                 */
+/* ========================================================================== */
+{
+  const b = section('MOTIFS', 'SDF layer', false);
+  glabel(b, 'ROSE \u00b7 blooms on chord change');
+  ctl(b, 'gain', 'motifs.rose.gain', 0, 3, 0.05, 2);
+  ctl(b, 'fluxThreshold', 'motifs.rose.chromaFluxThreshold', 0.05, 1, 0.01, 2);
+  ctl(b, 'petals', 'motifs.rose.petals', 3, 21, 1, 0);
+  glabel(b, 'BOLT \u00b7 fires on percussive onsets');
+  ctl(b, 'gain', 'motifs.bolt.gain', 0, 3, 0.05, 2);
+  ctl(b, 'threshold', 'motifs.bolt.threshold', 0.1, 1, 0.01, 2);
+  ctl(b, 'forkDepth', 'motifs.bolt.forkDepth', 1, 3, 1, 0);
+  glabel(b, 'GLYPH \u00b7 not in phase 0');
+  hint(b, 'motif/glyph.frag ships in Phase 1 reading a user-supplied SDF atlas '
+        + 'from data/glyphs/, empty by default. The gain value round-trips through '
+        + 'the preset JSON so authored presets stay valid.');
+  ctl(b, 'gain (stored)', 'motifs.glyph.gain', 0, 2, 0.05, 2);
+}
+
+/* ========================================================================== */
+/*  7. PARTICLES                                                              */
+/* ========================================================================== */
+{
+  const b = section('PARTICLES', 'GPU advected', false);
+  ctl(b, 'count', 'particles.count', 0, 64000, 1000, 0);
+  ctl(b, 'curlScale', 'particles.curlScale', 0.3, 5, 0.05, 2);
+  ctl(b, 'lifetime', 'particles.lifetime', 0.5, 9, 0.1, 1);
+  ctl(b, 'size', 'particles.size', 0.5, 8, 0.1, 1);
+  ctl(b, 'rise', 'particles.rise', -1, 1, 0.05, 2);
+  ctl(b, 'emitBand', 'particles.emitBand', 0, 7, 1, 0);
+}
+
+/* ========================================================================== */
+/*  8. POST                                                                   */
+/* ========================================================================== */
+{
+  const b = section('POST', 'composite', false);
+  ctl(b, 'exposure', 'post.exposure', 0.3, 3.0, 0.01, 2);
+  ctl(b, 'bloomThreshold', 'post.bloomThreshold', 0.1, 1.4, 0.01, 2);
+  ctl(b, 'bloomKnee', 'post.bloomKnee', 0.05, 1, 0.01, 2);
+  ctl(b, 'bloomGain', 'post.bloomGain', 0, 2, 0.02, 2);
+  ctl(b, 'bloomTaps', 'post.bloomTaps', 0, 3, 1, 0);
+  ctl(b, 'grain', 'post.grain', 0, 0.15, 0.002, 3);
+  ctl(b, 'vignette', 'post.vignette', 0, 0.8, 0.01, 2);
+  ctl(b, 'saturation', 'post.saturation', 0.6, 3.0, 0.02, 2);
+  const r = E('div', 'row');
+  r.appendChild(E('label', null, 'renderScale'));
+  const s = E('input'); s.type = 'range'; s.min = 0.3; s.max = 1; s.step = 0.05; s.value = 0.75;
+  const n = E('div', 'num', '0.75');
+  s.oninput = () => {
+    n.textContent = fmt(+s.value); GOV.auto = false; govBtn.classList.remove('on');
+    RENDER_SCALE = +s.value; resize(true);
+  };
+  r.appendChild(s); r.appendChild(n); b.appendChild(r);
+  scaleSlider = s; scaleNum = n;
+  const br = E('div', 'btnrow');
+  var govBtn = btn(br, 'GOVERNOR', () => {
+    GOV.auto = !GOV.auto; govBtn.classList.toggle('on', GOV.auto);
+  }, 'adaptive quality: renderScale, particles, octaves, bloom taps');
+  govBtn.classList.add('on');
+  b.appendChild(br);
+  govKv = kv(b, 'quality tier');
+  hint(b, 'The governor pulls the same dials in the same order as plan §11, so a '
+        + 'preset authored here is authored against the quality ladder the native '
+        + 'host will use. Move renderScale by hand to pin it.');
+}
+
+/* ========================================================================== */
+/*  9. MAPPING — feature -> parameter routing, as data                        */
+/* ========================================================================== */
+{
+  const b = section('MAPPING', 'routing table', false);
+  hint(b, 'This block is data, not code. New looks come from editing routes here '
+        + 'and exporting the JSON — not from writing shaders.');
+  MAP_SOURCES.forEach(src => {
+    selRow(b, src, MAP_TARGET_NAMES,
+      () => ST.live.mapping[src] || 'none',
+      v => { ST.live.mapping[src] = v; });
+  });
+}
+
+/* ========================================================================== */
+/*  10. SAFETY                                                                */
+/* ========================================================================== */
+let safeKv = {};
+{
+  const b = section('SAFETY LIMITER', '\u00a712 \u00b7 always on', false);
+  ctl(b, 'maxLumDelta', 'safety.maxLuminanceDelta', 0.01, 0.20, 0.005, 3);
+  ctl(b, 'maxBrightness', 'safety.maxBrightness', 0.30, 1.0, 0.01, 2);
+  safeKv.mean = kv(b, 'mean luminance');
+  safeKv.delta = kv(b, 'frame delta');
+  safeKv.scale = kv(b, 'limiter gain');
+  safeKv.flash = kv(b, 'flash rate Hz');
+  safeKv.clamp = kv(b, 'effective ceiling');
+  hint(b, 'Presets may be <b>stricter</b> than the floor, never looser: the host '
+        + 'clamps maxLuminanceDelta to \u2264 0.12 and maxBrightness to \u2264 0.92 '
+        + 'before upload, and the clamp also lives in safety.glsl. Above 3 Hz of '
+        + 'global brightness oscillation the gain is pulled down hard.');
+}
+
+/* ========================================================================== */
+/*  11. FEATURE DRIVER                                                        */
+/* ========================================================================== */
+{
+  const b = section('FEATURE DRIVER', 'synthetic \u00b7 224 B', true);
+
+  const mw = E('div', 'meters');
+  ['SUB', 'BAS', 'LOM', 'MID', 'HIM', 'PRS', 'BRI', 'AIR'].forEach(() => {
+    const m = E('div', 'm'); const sp = E('span'); m.appendChild(sp); mw.appendChild(m); bandMeters.push(sp);
+  });
+  b.appendChild(mw);
+  const lw = E('div', 'meters');
+  ['SUB', 'BAS', 'LOM', 'MID', 'HIM', 'PRS', 'BRI', 'AIR'].forEach(t => lw.appendChild(E('div', 'lbl', t)));
+  b.appendChild(lw);
+
+  const cw = E('div', 'chgrid');
+  for (let i = 0; i < 12; i++) { const m = E('div', 'm'); const sp = E('span'); m.appendChild(sp); cw.appendChild(m); chromaMeters.push(sp); }
+  b.appendChild(cw);
+  const cl = E('div', 'chgrid');
+  ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'].forEach(t => cl.appendChild(E('div', 'lbl', t)));
+  b.appendChild(cl);
+
+  const br = E('div', 'btnrow');
+  btn(br, 'ALL LFO OFF', () => { FIELDS.forEach(f => { SYN[f.key].lfo.on = false; }); refreshDriver(); });
+  btn(br, 'JAM', () => { seedDefaultLfos(); refreshDriver(); });
+  btn(br, 'ZERO', () => { FIELDS.forEach(f => { if (!f.auto) SYN[f.key].v = f.min > 0 ? f.min : 0; }); refreshDriver(); });
+  btn(br, 'DEFAULTS', () => { FIELDS.forEach(f => { SYN[f.key].v = f.def; }); refreshDriver(); });
+  const rhBtn = btn(br, 'AUTO RHYTHM', () => {
+    SYNTH.autoRhythm = !SYNTH.autoRhythm;
+    rhBtn.classList.toggle('on', SYNTH.autoRhythm);
+  }, 'advance beat/bar phase and fire onsets from BPM');
+  rhBtn.classList.add('on');
+  b.appendChild(br);
+
+  GROUPS.forEach(g => {
+    glabel(b, g);
+    FIELDS.filter(f => f.group === g).forEach(f => {
+      const syn = SYN[f.key];
+      if (f.auto) {
+        const r = E('div', 'row');
+        const lb = E('label', null, f.label); lb.style.color = 'var(--dimmer)';
+        r.appendChild(lb);
+        const note = E('div', null, 'derived'); note.style.fontSize = '9px'; note.style.color = 'var(--dimmer)';
+        const num = E('div', 'num', '--');
+        r.appendChild(note); r.appendChild(num);
+        b.appendChild(r);
+        driverRows[f.key] = { num };
+        return;
+      }
+      const r = E('div', 'row f3');
+      const lb = E('label', f.approx ? 'ap' : null, f.label);
+      r.appendChild(lb);
+      const s = E('input'); s.type = 'range'; s.min = f.min; s.max = f.max;
+      s.step = (f.max - f.min) / 200; s.value = syn.v;
+      const num = E('div', 'num', fmt(syn.v, f.raw ? 1 : 2));
+      const lb2 = E('button', 'lfobtn' + (syn.lfo.on ? ' on' : ''), '\u223f');
+      r.appendChild(s); r.appendChild(num); r.appendChild(lb2);
+      b.appendChild(r);
+
+      const lp = E('div', 'lfopanel' + (syn.lfo.on ? ' on' : ''));
+      const mkCell = (label, node) => { const c = E('div', 'cell'); c.appendChild(E('i', null, label)); c.appendChild(node); lp.appendChild(c); return node; };
+      const rt = E('input'); rt.type = 'number'; rt.step = 0.005; rt.min = 0; rt.max = 20; rt.value = syn.lfo.rate;
+      const dp = E('input'); dp.type = 'number'; dp.step = 0.05; dp.min = 0; dp.max = 1; dp.value = syn.lfo.depth;
+      const sh = E('select'); LFO_SHAPES.forEach(x => { const o = E('option', null, x); o.value = x; sh.appendChild(o); });
+      sh.value = syn.lfo.shape;
+      mkCell('RATE Hz', rt); mkCell('DEPTH', dp); mkCell('SHAPE', sh);
+      rt.oninput = () => { syn.lfo.rate = +rt.value; };
+      dp.oninput = () => { syn.lfo.depth = +dp.value; };
+      sh.onchange = () => { syn.lfo.shape = sh.value; };
+      b.appendChild(lp);
+
+      s.oninput = () => { syn.v = +s.value; num.textContent = fmt(syn.v, f.raw ? 1 : 2); };
+      lb2.onclick = () => {
+        syn.lfo.on = !syn.lfo.on;
+        lb2.classList.toggle('on', syn.lfo.on);
+        lp.classList.toggle('on', syn.lfo.on);
+        s.classList.toggle('lfo', syn.lfo.on);
+      };
+      s.classList.toggle('lfo', syn.lfo.on);
+      driverRows[f.key] = { slider: s, num, lfoBtn: lb2, lfoPanel: lp, rt, dp, sh };
+    });
+  });
+}
+function refreshDriver() {
+  FIELDS.forEach(f => {
+    const r = driverRows[f.key], syn = SYN[f.key];
+    if (!r) return;
+    if (r.slider) {
+      r.slider.value = syn.v;
+      r.num.textContent = fmt(syn.v, f.raw ? 1 : 2);
+      r.lfoBtn.classList.toggle('on', syn.lfo.on);
+      r.lfoPanel.classList.toggle('on', syn.lfo.on);
+      r.slider.classList.toggle('lfo', syn.lfo.on);
+      r.rt.value = syn.lfo.rate; r.dp.value = syn.lfo.depth; r.sh.value = syn.lfo.shape;
+    }
+  });
+}
+
+/* ========================================================================== */
+/*  12. TIMELINE                                                              */
+/* ========================================================================== */
+let tlKv = {}, tlBar, tlSeconds, tlRate, tlRecBtn;
+{
+  const b = section('FEATURE TIMELINE', 'parity gate', false);
+  hint(b, 'Record the Feature Frame to JSON, replay it on the native host, diff '
+        + 'the frames. This is what makes the Phase 1 cross-host parity gate '
+        + 'executable rather than aspirational.');
+  const r1 = E('div', 'row');
+  r1.appendChild(E('label', null, 'seconds'));
+  tlSeconds = E('input'); tlSeconds.type = 'number'; tlSeconds.min = 1; tlSeconds.max = 300; tlSeconds.value = 20;
+  r1.appendChild(tlSeconds); r1.appendChild(E('div', 'num', 's'));
+  b.appendChild(r1);
+  const r2 = E('div', 'row');
+  r2.appendChild(E('label', null, 'rate'));
+  tlRate = E('input'); tlRate.type = 'number'; tlRate.min = 5; tlRate.max = 120; tlRate.value = 60;
+  r2.appendChild(tlRate); r2.appendChild(E('div', 'num', 'fps'));
+  b.appendChild(r2);
+  const br = E('div', 'btnrow');
+  tlRecBtn = btn(br, '\u25cf REC', () => {
+    if (TL.rec) { tlStop(); } else { tlStart(+tlSeconds.value, +tlRate.value); }
+    tlRecBtn.classList.toggle('on', TL.rec);
+  });
+  btn(br, 'EXPORT', () => {
+    if (!TL.frames.length) return toast('nothing recorded');
+    download('feature-timeline-' + TL.frames.length + 'f.json', tlExport());
+  });
+  btn(br, 'LOAD', () => tlFile.click());
+  btn(br, 'PLAY/STOP', () => { if (TL.data) { TL.play = !TL.play; syncSourceUi(); } else toast('no timeline loaded'); });
+  btn(br, 'CLEAR', () => { TL.frames = []; TL.data = null; TL.play = false; syncSourceUi(); });
+  b.appendChild(br);
+  var tlFile = E('input'); tlFile.type = 'file'; tlFile.accept = '.json,application/json'; tlFile.style.display = 'none';
+  tlFile.onchange = e => {
+    const f = e.target.files[0]; if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => { try { tlLoad(JSON.parse(rd.result)); syncSourceUi(); toast('timeline loaded'); } catch (err) { toast(err.message); } };
+    rd.readAsText(f);
+  };
+  b.appendChild(tlFile);
+  tlBar = E('div', 'bar'); tlBar.appendChild(E('span')); b.appendChild(tlBar);
+  tlKv.frames = kv(b, 'frames captured');
+  tlKv.bytes = kv(b, 'frame size');
+  tlKv.bytes.textContent = FEATURE_BYTES + ' B';
+}
+
+/* ========================================================================== */
+/*  13. SHADER TREE                                                           */
+/* ========================================================================== */
+{
+  const b = section('SHADER TREE', 'extraction', false);
+  hint(b, 'Every shader is fenced in this file with a <b>// ===== FILE: \u2026 =====</b> '
+        + 'marker. <b>tools/extract-shaders.mjs</b> splits them into shaders/ with no '
+        + 'judgment calls. Includes are resolved by the same flat textual resolver '
+        + 'the native host must implement.');
+  const ta = E('textarea');
+  ta.readOnly = true;
+  ta.value = Object.keys(SHADER_FS).map(k => 'shaders/' + k
+    + '  ' + String(SHADER_FS[k].split('\n').length) + 'L').join('\n');
+  ta.style.height = '150px';
+  b.appendChild(ta);
+  const br = E('div', 'btnrow');
+  btn(br, 'DUMP RESOLVED', () => {
+    const which = ST.live.fractal;
+    const path = (FRACTALS[which] || FRACTALS.warp_fbm).path;
+    const txt = PREAMBLE_FRAG + loadShaderSource(path);
+    download(path.replace(/\//g, '_') + '.resolved.glsl', txt);
+  }, 'download the active fractal with includes resolved + preamble');
+  b.appendChild(br);
+}
+
+/* --- toast + panel chrome ------------------------------------------------ */
+let toastT = 0;
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('on');
+  clearTimeout(toastT);
+  toastT = setTimeout(() => t.classList.remove('on'), 1800);
+}
+const panel = document.getElementById('panel');
+document.getElementById('collapse').onclick = () => { panel.classList.add('collapsed'); resize(true); };
+document.getElementById('railToggle').onclick = () => { panel.classList.remove('collapsed'); resize(true); };
+document.getElementById('hudToggle').onclick = () => {
+  hudEl.classList.toggle('off');
+  document.getElementById('hudToggle').classList.toggle('on', !hudEl.classList.contains('off'));
+};
+
+function refresh() { BIND.forEach(f => f()); buildStops(); }
+function applyPreset() {
+  resolvePreset();
+  SYN.era.v = ST.live.eraId != null ? ST.live.eraId : 7;
+  if (typeof refreshDriver === 'function') refreshDriver();
+  refresh();
+  const p = LIBRARY[ST.presetIdx];
+  showCaption((p.name || p.id) + '  \u00b7  ' + ST.live.fractal + (ST.song !== '(none)' ? '  \u00b7  ' + ST.song : ''));
+}
+let capT = 0;
+function showCaption(txt) {
+  const c = document.getElementById('cap');
+  c.textContent = txt; c.classList.add('on');
+  hudEl.style.opacity = hudEl.classList.contains('off') ? '' : '0';
+  clearTimeout(capT);
+  capT = setTimeout(() => { c.classList.remove('on'); hudEl.style.opacity = ''; }, 4200);
+}
+</script>
+
+<script>
+/* ==========================================================================
+   RIPPLE — feature assembly, render loop, safety control loop.
+   ========================================================================== */
+
+
+const SY = { onsetEnv: 0, cfluxEnv: 0, novEnv: 0, lastBeats: 0, lastBar: -1, t: 0 };
+const MOT = { rose: 0, roseSeed: 1.3, roseCool: 0, bolt: 0, boltSeed: 7.1, boltCool: 0 };
+const SAFE = { mean: 0.12, prev: 0.12, scale: 1, lastD: 0, zc: [], flashRate: 0, pix: new Uint8Array(4) };
+const PERF = { last: 0, ms: 8, raw: 8, iv: 16, ivEma: 16, fps: 60, frames: 0, acc: 0, t: 0 };
+
+/* Plan §11 — quality dials pulled in the specified order: renderScale first
+   (largest, cheapest win), then particle count, then fractal octaves, then
+   bloom taps. Asymmetric hysteresis: 30 frames down, 300 frames up, 2 s
+   minimum dwell. One extra rule the plan does not have but a browser needs:
+   a single catastrophic frame drops straight to the floor, because a software
+   rasterizer will otherwise wedge the tab before the counter ever fills. */
+const GOV = {
+  auto: true, tier: 0, down: 0, up: 0, dwell: 0, panic: false, probe: null,
+  tiers: [
+    { scale: 0.75, part: 1.00, oct: 0,  taps: 0 },
+    { scale: 0.60, part: 0.55, oct: -1, taps: 0 },
+    { scale: 0.50, part: 0.28, oct: -1, taps: -1 },
+    { scale: 0.40, part: 0.12, oct: -2, taps: -2 },
+    { scale: 0.30, part: 0.00, oct: -3, taps: -3 },
+    { scale: 0.22, part: 0.00, oct: -4, taps: -3 }
+  ]
+};
+function govSet(tier) {
+  tier = Math.max(0, Math.min(GOV.tiers.length - 1, tier));
+  if (tier === GOV.tier) return;
+  GOV.tier = tier; GOV.down = GOV.up = 0; GOV.dwell = 0;
+  RENDER_SCALE = GOV.tiers[tier].scale;
+  resize(true);
+}
+function govApply() {
+  const t = GOV.tiers[GOV.tier];
+  D.octaves = Math.max(2, D.octaves + t.oct);
+  D.pCount *= t.part;
+  D.bloomTaps = Math.max(0, D.bloomTaps + t.taps);
+  if (GOV.panic) { D.pCount = 0; D.bloomTaps = 0; D.bloomGain *= 0.5; D.octaves = 2; }
+}
+/* GL draw calls are asynchronous, so wall-clock time around renderFrame()
+   measures submission, not the GPU. The honest signal available in a browser
+   is the rAF interval: if the GPU cannot keep up, the interval stretches. */
+function govTick(dt) {
+  if (!GOV.auto) return;
+  GOV.dwell += dt;
+  // Warm-up frames and backgrounded-tab gaps are not GPU slowness. Feeding
+  // them to the controller drops quality permanently on the first frame.
+  if (frameNo < 25 || PERF.iv > 400) return;
+  const iv = PERF.iv;                        // ms between rAF callbacks
+  if (iv > 220) { govSet(GOV.tiers.length - 1); GOV.panic = true; return; }
+  if (iv > 60 && GOV.dwell > 0.25) { govSet(GOV.tier + 1); return; }
+  if (iv < 20) GOV.panic = false;
+  if (PERF.ivEma > 22) { GOV.down++; GOV.up = 0; }
+  else if (PERF.ivEma < 17.4) { GOV.up++; GOV.down = 0; }
+  else { GOV.down = GOV.up = 0; }
+  if (GOV.down > 30 && GOV.dwell > 2) govSet(GOV.tier + 1);
+  else if (GOV.up > 300 && GOV.dwell > 2) govSet(GOV.tier - 1);
+}
+
+/* Warm-up probe. One synchronous hero-shader draw into a tiny target with an
+   explicit finish() gives a real per-pixel cost, so the harness opens at a
+   quality tier the machine can actually hold instead of discovering it by
+   stalling for several seconds on frame one. */
+function probeGpu() {
+  const PW = 128, PH = 72;
+  target(RT.bloomFbo[0], PW, PH);
+  gl.disable(gl.BLEND);
+  const fp = use(FRACTALS.warp_fbm.prog);
+  bindTex(1, palTex); ui(fp, 'uPalette', 1);
+  u1(fp, 'uPalRot', 0); u1(fp, 'uChromaBlend', 0.3); u1(fp, 'uSpiral', 0.2);
+  u1(fp, 'uSpiralSpin', 0); u1(fp, 'uPaint', 0.1);
+  u1(fp, 'uWarp', 4); u1(fp, 'uScale', 2); u1(fp, 'uFlow', 0.1);
+  u1(fp, 'uCells', 3); u1(fp, 'uRim', 1); u1(fp, 'uIrid', 0.6);
+  u1(fp, 'uMask', 0); u1(fp, 'uOct', 5); u1(fp, 'uRimWidth', 2.4);
+  tri(); gl.finish();                                  // discard: warm caches
+  const t0 = performance.now();
+  for (let i = 0; i < 3; i++) tri();
+  gl.finish();
+  const per = (performance.now() - t0) / (3 * PW * PH); // ms per pixel
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  // ~2.4 full-frame passes of comparable weight per rendered frame
+  let pick = GOV.tiers.length - 1;
+  for (let i = 0; i < GOV.tiers.length; i++) {
+    const sc = GOV.tiers[i].scale;
+    const est = per * (RT.w * sc) * (RT.h * sc) * 2.4;
+    if (est < 9.0) { pick = i; break; }
+  }
+  GOV.probe = { perPixelUs: per * 1000, tier: pick };
+  if (pick !== 0) govSet(pick);
+  return GOV.probe;
+}
+
+let tSec = 0, frameNo = 0;
+let palRotSmooth = 0, palRotPrev = 0, hueRate = 0, spiralSpin = 0;
+
+/* --- synthetic driver ---------------------------------------------------- */
+
+function synthField(f) {
+  const s = SYN[f.key];
+  let v = s.v;
+  if (s.lfo.on) v += lfoValue(s.lfo, tSec) * s.lfo.depth * (f.max - f.min) * 0.5;
+  return Math.min(f.max, Math.max(f.min, v));
+}
+
+function buildFeatureFrame(dt) {
+  const aspect = RT.w / Math.max(RT.h, 1);
+
+  if (TL.play && tlTick(dt)) {
+    // Replay is authoritative for everything the DSP owns; the host still owns
+    // time and resolution, exactly as the native player will.
+    F[0] = tSec; F[1] = dt;
+    F[48] = RT.w; F[49] = RT.h; F[50] = aspect; F[51] = RENDER_SCALE;
+    F[52] = F[53] = F[54] = F[55] = 0;
+    return;
+  }
+
+  if (A.mode === 'mic' || A.mode === 'file') {
+    const r = analyzeAudio(dt, tSec);
+    if (r) {
+      F[4] = r.rms; F[5] = r.peak; F[6] = r.loud; F[7] = r.dyn;
+      for (let i = 0; i < 8; i++) F[8 + i] = r.band[i];
+      F[16] = r.flux; F[17] = r.onset;
+      F[20] = synthField(FIELD_BY_KEY.bpm);          // APPROX — manual/LFO
+      F[21] = synthField(FIELD_BY_KEY.bpmConf);      // APPROX
+      F[23] = r.perc;                                // APPROX
+      for (let i = 0; i < 12; i++) F[24 + i] = r.chroma[i];
+      F[36] = r.keyHue; F[37] = r.keyConf; F[38] = r.cflux; F[39] = r.centroid;
+      F[40] = r.width; F[41] = r.bal; F[42] = r.novelty;
+      F[44] = synthField(FIELD_BY_KEY.intensity);
+      F[45] = SYN.era.v; F[46] = SYN.songMode.v; F[47] = synthField(FIELD_BY_KEY.paletteMix);
+      F[3] = A.mediaEl && A.mediaEl.duration ? (A.mediaEl.currentTime / A.mediaEl.duration) : 0;
+      F[2] = A.mediaEl ? A.mediaEl.currentTime : tSec;
+      advanceRhythm(dt, F[20], F[21], F[17]);
+      F[18] = RH.phase; F[19] = (RH.bar + RH.phase) / 4; F[22] = RH.beats;
+      F[43] = RH.sectionPhase;
+    }
+  } else {
+    /* synthetic */
+    for (let i = 0; i < FIELDS.length; i++) {
+      const f = FIELDS[i];
+      if (f.auto) continue;
+      F[f.i] = synthField(f);
+    }
+    F[2] = tSec; F[3] = SYN.trackFrac.v;
+
+    if (SYNTH.autoRhythm) {
+      advanceRhythm(dt, F[20], F[21], SY.onsetEnv);
+      SY.onsetEnv *= Math.exp(-dt / 0.150);
+      if (RH.beats !== SY.lastBeats) {
+        SY.lastBeats = RH.beats;
+        SY.onsetEnv = 0.75 + 0.25 * F[23];
+        if (RH.bar !== SY.lastBar) {
+          SY.lastBar = RH.bar;
+          // a chord change roughly every second bar — this is what makes the
+          // rose bloom testable without any audio at all
+          if (RH.bar === 0 && Math.random() < 0.55) SY.cfluxEnv = 0.85 + 0.15 * Math.random();
+        }
+      } else if (Math.random() < dt * 3.2 * F[23]) {
+        SY.onsetEnv = Math.max(SY.onsetEnv, 0.45 + 0.4 * Math.random());
+      }
+      SY.cfluxEnv *= Math.exp(-dt / 0.45);
+      SY.novEnv *= Math.exp(-dt / 1.6);
+      if (Math.random() < dt / 22) SY.novEnv = 0.9;
+      F[17] = Math.max(F[17], SY.onsetEnv);
+      F[38] = Math.max(F[38], SY.cfluxEnv);
+      F[42] = Math.max(F[42], SY.novEnv);
+      F[18] = RH.phase; F[19] = (RH.bar + RH.phase) / 4; F[22] = RH.beats;
+      F[43] = RH.sectionPhase;
+    } else {
+      F[18] = SYN.beatPhase.v; F[19] = SYN.barPhase.v;
+    }
+  }
+
+  F[0] = tSec; F[1] = dt;
+  F[48] = RT.w; F[49] = RT.h; F[50] = aspect; F[51] = RENDER_SCALE;
+  F[52] = F[53] = F[54] = F[55] = 0;
+}
+
+/* --- motif envelopes (host side, so the shaders stay stateless) ---------- */
+
+function advanceMotifs(dt) {
+  MOT.rose *= Math.exp(-dt / 1.15);
+  MOT.roseCool -= dt;
+  if (F[38] > D.roseThreshold && MOT.roseCool <= 0) {
+    MOT.rose = 1; MOT.roseSeed = Math.random() * 90; MOT.roseCool = 0.85;
+  }
+  MOT.bolt *= Math.exp(-dt / 0.155);
+  MOT.boltCool -= dt;
+  if (F[17] > 0.82 && F[23] > D.boltThreshold && MOT.boltCool <= 0) {
+    MOT.bolt = 1; MOT.boltSeed = Math.random() * 90; MOT.boltCool = 0.14;
+  }
+}
+
+/* --- palette rotation, smoothed on the shortest circular path ----------- */
+
+function advancePalette(dt) {
+  const wantRaw = ST.live.palette.rotateByKey ? D.palRot : 0;
+  let d = (wantRaw - palRotSmooth) % 1;
+  if (d > 0.5) d -= 1; if (d < -0.5) d += 1;
+  palRotSmooth += d * Math.min(1, dt * 1.6);
+  palRotSmooth = ((palRotSmooth % 1) + 1) % 1;
+  let hd = Math.abs(palRotSmooth - palRotPrev);
+  if (hd > 0.5) hd = 1 - hd;
+  hueRate = hd / Math.max(dt, 1e-4);
+  palRotPrev = palRotSmooth;
+  spiralSpin += dt * (F[20] / 60) * 0.25 * 0.18;
+}
+
+/* ========================================================================== */
+/*  render                                                                    */
+/* ========================================================================== */
+
+function palUniforms(rec) {
+  bindTex(1, palTex); ui(rec, 'uPalette', 1);
+  u1(rec, 'uPalRot', palRotSmooth);
+  u1(rec, 'uChromaBlend', D.chromaBlend);
+  u1(rec, 'uSpiral', D.spiral);
+  u1(rec, 'uSpiralSpin', spiralSpin);
+  u1(rec, 'uPaint', D.paint);
+}
+
+function renderFrame() {
+  const src = RT.cur, dst = 1 - RT.cur;
+
+  /* ---- PASS A: warp the feedback buffer ------------------------------- */
+  target(RT.pingFbo[dst], RT.pw, RT.ph);
+  gl.disable(gl.BLEND);
+  const w = use(P.warp);
+  bindTex(0, RT.ping[src]); ui(w, 'uPrev', 0);
+  u1(w, 'uDecay', D.decay); u1(w, 'uZoom', D.zoom); u1(w, 'uRotate', D.rotate);
+  u1(w, 'uWarpAmount', D.warpAmount); u1(w, 'uWarpScale', D.warpScale);
+  u1(w, 'uBassGain', D.bassGain); u1(w, 'uSymmetry', D.symmetry);
+  u1(w, 'uOnsetDecay', D.onsetDecay); u1(w, 'uCenterPull', D.centerPull);
+  tri();
+
+  /* ---- PASS B: additive paint ----------------------------------------- */
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.ONE, gl.ONE);
+
+  let famKey = D.fractal;
+  if (!FRACTALS[famKey]) famKey = FRACTAL_STUBS[famKey] || 'warp_fbm';
+  const fam = FRACTALS[famKey];
+  const fp = use(fam.prog);
+  palUniforms(fp);
+  u1(fp, 'uWarp', D.warp); u1(fp, 'uScale', D.scale); u1(fp, 'uFlow', D.flow);
+  u1(fp, 'uCells', D.cells); u1(fp, 'uRim', D.rim); u1(fp, 'uIrid', D.iridescence);
+  u1(fp, 'uMask', D.mask); u1(fp, 'uOct', D.octaves); u1(fp, 'uRimWidth', D.rimWidth);
+  u1(fp, 'uIter', D.iterations); u1(fp, 'uEscape', D.escapeRadius);
+  u1(fp, 'uOrbitR', D.orbitRadius); u1(fp, 'uBeatMorph', D.beatMorph);
+  u1(fp, 'uTrapGain', D.trapGain);
+  u1(fp, 'uFold', D.fold); u1(fp, 'uLine', D.line);
+  u1(fp, 'uZoomPeriod', D.zoomPeriod); u1(fp, 'uZoomDepth', D.zoomDepth);
+  tri();
+
+  if (MOT.rose > 0.004 && D.roseGain > 0.001) {
+    const r = use(P.rose);
+    palUniforms(r);
+    u1(r, 'uGain', D.roseGain * D.motifOpacity * D.motifGain);
+    u1(r, 'uPetals', D.rosePetals);
+    u1(r, 'uBloom', MOT.rose);
+    u1(r, 'uSeed', MOT.roseSeed);
+    tri();
+  }
+  if (MOT.bolt > 0.005 && D.boltGain > 0.001) {
+    const bo = use(P.bolt);
+    palUniforms(bo);
+    u1(bo, 'uGain', D.boltGain * D.motifOpacity * D.motifGain);
+    u1(bo, 'uForkDepth', D.boltFork);
+    u1(bo, 'uImpulse', MOT.bolt);
+    u1(bo, 'uSeed', MOT.boltSeed);
+    tri();
+  }
+
+  const pc = Math.min(PARTICLE_MAX, Math.round(D.pCount));
+  if (pc > 64) {
+    const pp = use(P.part);
+    palUniforms(pp);
+    u1(pp, 'uCurlScale', D.pCurl); u1(pp, 'uLifetime', D.pLife);
+    u1(pp, 'uSize', D.pSize); u1(pp, 'uEmit', D.pEmit); u1(pp, 'uRise', D.pRise);
+    gl.bindVertexArray(partVao);
+    gl.drawArrays(gl.POINTS, 0, pc);
+    gl.bindVertexArray(null);
+  }
+  gl.disable(gl.BLEND);
+
+  /* ---- bloom: bright pass + separable blur at quarter res -------------- */
+  target(RT.bloomFbo[0], RT.bw, RT.bh);
+  const br = use(P.bright);
+  bindTex(0, RT.ping[dst]); ui(br, 'uSrc', 0);
+  u1(br, 'uThreshold', D.bloomThreshold); u1(br, 'uKnee', D.bloomKnee);
+  tri();
+  if (D.bloomTaps >= 1) {
+    const bl = use(P.blur);
+    u1(bl, 'uTaps', D.bloomTaps);
+    target(RT.bloomFbo[1], RT.bw, RT.bh);
+    bindTex(0, RT.bloom[0]); ui(bl, 'uSrc', 0);
+    u2(bl, 'uDir', 1 / RT.bw, 0);
+    tri();
+    target(RT.bloomFbo[0], RT.bw, RT.bh);
+    bindTex(0, RT.bloom[1]);
+    u2(bl, 'uDir', 0, 1 / RT.bh);
+    tri();
+  }
+
+  /* ---- PASS C: composite + safety ------------------------------------- */
+  target(RT.finalFbo, RT.w, RT.h);
+  const c = use(P.comp);
+  bindTex(0, RT.ping[dst]); ui(c, 'uScene', 0);
+  bindTex(1, RT.bloom[0]); ui(c, 'uBloom', 1);
+  u1(c, 'uExposure', D.exposure); u1(c, 'uBloomGain', D.bloomGain);
+  u1(c, 'uGrain', D.grain); u1(c, 'uVignette', D.vignette);
+  u1(c, 'uSaturate', D.saturate);
+  u1(c, 'uIdle', 1);
+  u1(c, 'uSafetyScale', SAFE.scale);
+  u1(c, 'uMaxBright', D.maxBright);
+  u1(c, 'uHueRate', hueRate);
+  tri();
+
+  /* ---- present -------------------------------------------------------- */
+  gl.bindFramebuffer(gl.READ_FRAMEBUFFER, RT.finalFbo);
+  gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+  gl.blitFramebuffer(0, 0, RT.w, RT.h, 0, 0, RT.w, RT.h, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+  RT.cur = dst;
+}
+
+/* --- safety control loop (§12) ------------------------------------------ */
+
+function measureLuminance(dt) {
+  gl.bindTexture(gl.TEXTURE_2D, RT.final);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, RT.mipFbo);
+  gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, SAFE.pix);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+  SAFE.prev = SAFE.mean;
+  SAFE.mean = (0.2126 * SAFE.pix[0] + 0.7152 * SAFE.pix[1] + 0.0722 * SAFE.pix[2]) / 255;
+  const d = SAFE.mean - SAFE.prev;
+
+  // Full-field flash rate. A reversal only counts when the swing is large
+  // enough to read as a flash — sign changes alone fire on any lively scene,
+  // and a limiter that dims a merely busy image is a bug, not caution.
+  const swing = Math.max(0.05, D.maxLumDelta * 0.8);
+  if (Math.sign(d) !== Math.sign(SAFE.lastD) && Math.abs(d) > swing
+      && Math.abs(SAFE.lastD) > swing) SAFE.zc.push(tSec);
+  while (SAFE.zc.length && tSec - SAFE.zc[0] > 1.0) SAFE.zc.shift();
+  SAFE.flashRate = SAFE.zc.length * 0.5;
+  if (Math.abs(d) > swing * 0.5) SAFE.lastD = d;
+
+  let want = 1;
+  if (d > D.maxLumDelta)
+    want = Math.max(0.20, (SAFE.prev + D.maxLumDelta) / Math.max(SAFE.mean, 1e-3));
+  // Above 3 Hz, back off proportionally rather than slamming to a fixed floor.
+  if (SAFE.flashRate > 3)
+    want = Math.min(want, Math.max(0.45, 1 - 0.14 * (SAFE.flashRate - 3)));
+  SAFE.scale = want < SAFE.scale ? want : Math.min(1, SAFE.scale + dt * 1.2);
+}
+
+/* ========================================================================== */
+/*  HUD                                                                       */
+/* ========================================================================== */
+
+const NOTE_NAMES = ['C', 'G', 'D', 'A', 'E', 'B', 'F#', 'C#', 'G#', 'D#', 'A#', 'F'];
+const hudRows = {};
+{
+  const rows = [
+    ['fam', 'FAMILY'], ['bpm', 'BPM'], ['key', 'KEY'], ['era', 'ERA'],
+    ['decay', 'DECAY'], ['lim', 'LIMITER'], ['perf', 'FRAME']
+  ];
+  rows.forEach(([k, label]) => {
+    const d = E('div');
+    d.appendChild(E('span', 'k', label + ' '));
+    const b = E('b', null, '--');
+    d.appendChild(b);
+    hudEl.appendChild(d);
+    hudRows[k] = b;
+  });
+}
+
+function updateReadouts(now) {
+  PERF.frames++;
+  PERF.acc += 1;
+  if (now - PERF.t < 140) return;
+  const el = (now - PERF.t) / 1000;
+  PERF.fps = PERF.frames / el;
+  PERF.t = now; PERF.frames = 0;
+
+  document.getElementById('sFps').textContent = PERF.fps.toFixed(0);
+  const msEl = document.getElementById('sMs');
+  msEl.textContent = PERF.ivEma.toFixed(1);
+  msEl.className = PERF.ivEma > 20 ? 'hot' : '';
+  document.getElementById('sRes').textContent = RT.pw + '\u00d7' + RT.ph;
+  document.getElementById('sFrac').textContent = D.fractal;
+  if (govKv) govKv.textContent = 'T' + GOV.tier + (GOV.panic ? '!' : '') + '  \u00b7  \u00d7' + fmt(RENDER_SCALE, 2)
+    + '  \u00b7  oct ' + D.octaves + '  \u00b7  ' + Math.round(D.pCount / 1000) + 'k';
+  if (scaleSlider && Math.abs(+scaleSlider.value - RENDER_SCALE) > 0.001) {
+    scaleSlider.value = RENDER_SCALE; scaleNum.textContent = fmt(RENDER_SCALE, 2);
+  }
+
+  for (let i = 0; i < 8; i++) bandMeters[i].style.height = (F[8 + i] * 100).toFixed(1) + '%';
+  for (let i = 0; i < 12; i++) chromaMeters[i].style.height = (F[24 + i] * 100).toFixed(1) + '%';
+
+  FIELDS.forEach(f => {
+    const r = driverRows[f.key];
+    if (!r) return;
+    if (f.auto) r.num.textContent = fmt(F[f.i], f.i === 0 || f.i === 2 ? 1 : (f.raw ? 0 : 3));
+    else if (A.mode !== 'synth' || TL.play) r.num.textContent = fmt(F[f.i], f.raw ? 1 : 2);
+  });
+
+  safeKv.mean.textContent = fmt(SAFE.mean, 3);
+  safeKv.delta.textContent = fmt(SAFE.mean - SAFE.prev, 3);
+  safeKv.scale.textContent = fmt(SAFE.scale, 3);
+  safeKv.scale.className = SAFE.scale < 0.999 ? 'bad' : 'ok';
+  safeKv.flash.textContent = fmt(SAFE.flashRate, 1);
+  safeKv.flash.className = SAFE.flashRate > 3 ? 'bad' : '';
+  safeKv.clamp.textContent = fmt(D.maxLumDelta, 3) + ' / ' + fmt(D.maxBright, 2);
+
+  tlKv.frames.textContent = TL.frames.length + (TL.rec ? ' \u25cf' : '');
+  tlBar.firstChild.style.width = (100 * Math.min(1, TL.frames.length / Math.max(1, TL.seconds * TL.rate))) + '%';
+  if (!TL.rec && tlRecBtn.classList.contains('on')) tlRecBtn.classList.remove('on');
+
+  if (!hudEl.classList.contains('off')) {
+    hudRows.fam.textContent = D.fractal;
+    hudRows.bpm.textContent = F[20].toFixed(1) + '  ~' + (F[21] < 0.35 ? '  FREE' : '');
+    hudRows.key.textContent = NOTE_NAMES[Math.round(F[36] * 12) % 12] + '  ~conf ' + fmt(F[37], 2);
+    hudRows.era.textContent = Math.round(F[45]) + '  ' + (ST.live.name || '');
+    hudRows.decay.textContent = fmt(D.decay, 4) + '   paint ' + fmt(D.paint, 3);
+    hudRows.lim.textContent = fmt(SAFE.scale, 3) + '   lum ' + fmt(SAFE.mean, 3)
+      + '   flash ' + fmt(SAFE.flashRate, 1) + 'Hz';
+    hudRows.perf.textContent = PERF.ivEma.toFixed(1) + ' ms   ' + PERF.fps.toFixed(0) + ' fps   '
+      + RT.pw + '\u00d7' + RT.ph + '  T' + GOV.tier + '  ' + (GLCAP.float ? 'RGBA16F' : 'RGBA8');
+  }
+  syncSourceUi();
+}
+
+/* ========================================================================== */
+/*  resize + loop                                                             */
+/* ========================================================================== */
+
+const MAX_PIXELS = 1280 * 720;
+function resize(force) {
+  const st = document.getElementById('stage');
+  let dpr = Math.min(window.devicePixelRatio || 1, 1.25);
+  let w = Math.max(64, Math.round(st.clientWidth * dpr));
+  let h = Math.max(64, Math.round(st.clientHeight * dpr));
+  if (w * h > MAX_PIXELS) {
+    const k = Math.sqrt(MAX_PIXELS / (w * h));
+    w = Math.max(64, Math.round(w * k)); h = Math.max(64, Math.round(h * k));
+  }
+  if (!force && w === RT.w && h === RT.h) return;
+  cv.width = w; cv.height = h;
+  allocTargets(w, h, RENDER_SCALE);
+  RT.mipLevels = 1 + Math.floor(Math.log2(Math.max(w, h)));
+  gl.bindTexture(gl.TEXTURE_2D, RT.final);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  RT.mipFbo = mkFbo(RT.final, RT.mipLevels - 1);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+new ResizeObserver(() => resize(false)).observe(document.getElementById('stage'));
+
+let tPrev = performance.now();
+let rafSeen = false, fallbackTimer = null;
+
+function loop(now) {
+  if (fallbackTimer) { clearInterval(fallbackTimer); fallbackTimer = null; }
+  rafSeen = true;
+  tick(now);
+  requestAnimationFrame(loop);
+}
+
+function tick(now) {
+  PERF.iv = frameNo === 0 ? 16.7 : (now - tPrev);
+  PERF.ivEma += (PERF.iv - PERF.ivEma) * 0.12;
+  const dt = Math.min(0.05, Math.max(0.0004, PERF.iv / 1000));
+  tPrev = now;
+  tSec += dt;
+  frameNo++;
+
+  buildFeatureFrame(dt);
+  uploadFeatureFrame();
+
+  resetDraw(ST.live);
+  applyMapping(ST.live.mapping);
+  govApply();
+  advanceMotifs(dt);
+  advancePalette(dt);
+
+  const t0 = performance.now();
+  renderFrame();
+  if (frameNo % 3 === 0 && PERF.ivEma < 40) measureLuminance(dt * 3);
+  PERF.raw = performance.now() - t0;
+  PERF.ms += (PERF.raw - PERF.ms) * 0.10;
+  govTick(dt);
+
+  tlCapture(dt);
+  updateReadouts(now);
+}
+
+/* --- keyboard ----------------------------------------------------------- */
+window.addEventListener('keydown', e => {
+  if (/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
+  const k = e.key.toLowerCase();
+  if (k === 'tab') { e.preventDefault(); panel.classList.toggle('collapsed'); resize(true); }
+  else if (k === 'd') { document.getElementById('hudToggle').click(); }
+  else if (k === '[') { SYN.intensity.v = Math.max(0, SYN.intensity.v - 0.05); refreshDriver(); toast('intensity ' + fmt(SYN.intensity.v)); }
+  else if (k === ']') { SYN.intensity.v = Math.min(1, SYN.intensity.v + 0.05); refreshDriver(); toast('intensity ' + fmt(SYN.intensity.v)); }
+  else if (k === 'arrowright') { ST.presetIdx = (ST.presetIdx + 1) % LIBRARY.length; presetSel.value = String(ST.presetIdx); applyPreset(); }
+  else if (k === 'arrowleft') { ST.presetIdx = (ST.presetIdx + LIBRARY.length - 1) % LIBRARY.length; presetSel.value = String(ST.presetIdx); applyPreset(); }
+  else if (k === 'r') { tlRecBtn.click(); }
+  else if (k === 'm') { useMic(); }
+});
+
+/* --- go ----------------------------------------------------------------- */
+if (document.documentElement.clientWidth < 780) panel.classList.add('collapsed');
+resize(true);
+applyPreset();
+probeGpu();
+syncSourceUi();
+requestAnimationFrame(loop);
+
+/* Embedded preview panes report document.hidden and suspend requestAnimationFrame.
+   Plan §11 says an occluded window should stop rendering entirely, and that is
+   the right behaviour for the shipped app — but in a preview the harness would
+   just be a black rectangle. Fall back to a timer at a reduced rate, and hand
+   control straight back to rAF the moment it wakes up. */
+setTimeout(() => {
+  if (!rafSeen && !fallbackTimer) fallbackTimer = setInterval(() => tick(performance.now()), 33);
+}, 700);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) requestAnimationFrame(loop);
+});
+</script>
+</body>
+</html>

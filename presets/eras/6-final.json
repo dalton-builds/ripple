@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "id": "era-final",
+  "name": "1991-95 Final Years",
+  "eraId": 6,
+  "fractal": "warp_fbm",
+  "palette": {
+    "stops": [
+      "#0A0710",
+      "#3D2B56",
+      "#6B4C93",
+      "#C9A8E0"
+    ],
+    "chromaBlend": 0.28,
+    "rotateByKey": true
+  },
+  "feedback": {
+    "decay": 0.993,
+    "zoom": 1.0022,
+    "rotate": 0.0008,
+    "warpAmount": 0.3,
+    "warpScale": 1.7,
+    "bassGain": 1.05
+  },
+  "fractalParams": {
+    "iterations": 96,
+    "escapeRadius": 4,
+    "orbitRadius": 0.2,
+    "beatMorph": 0.35
+  },
+  "motifs": {
+    "bolt": {
+      "gain": 0.5,
+      "threshold": 0.55,
+      "forkDepth": 3
+    },
+    "rose": {
+      "gain": 0.8,
+      "chromaFluxThreshold": 0.4,
+      "petals": 13
+    },
+    "glyph": {
+      "gain": 0.22,
+      "atlas": "default",
+      "emitOn": "novelty"
+    }
+  },
+  "particles": {
+    "count": 28000,
+    "curlScale": 1.2,
+    "emitBand": 4,
+    "lifetime": 4.6
+  },
+  "post": {
+    "bloomThreshold": 0.7,
+    "bloomGain": 0.5,
+    "grain": 0.03,
+    "vignette": 0.25
+  },
+  "mapping": {
+    "sub": "feedbackZoom",
+    "bass": "warpAmount",
+    "lowMid": "fractalIterations",
+    "mid": "motifOpacity",
+    "presence": "particleEmit",
+    "air": "grain",
+    "stereoWidth": "symmetry",
+    "keyHue": "paletteRotate",
+    "novelty": "fractalMorph",
+    "percussivity": "motifGain"
+  },
+  "safety": {
+    "maxLuminanceDelta": 0.08,
+    "maxBrightness": 0.85
+  }
+}

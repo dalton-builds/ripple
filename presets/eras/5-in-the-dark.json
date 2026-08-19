@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "id": "era-in-the-dark",
+  "name": "1987-90 In the Dark",
+  "eraId": 5,
+  "fractal": "julia_orbit",
+  "palette": {
+    "stops": [
+      "#12061F",
+      "#7B2FBE",
+      "#00B8D4",
+      "#FF6B35"
+    ],
+    "chromaBlend": 0.36,
+    "rotateByKey": true
+  },
+  "feedback": {
+    "decay": 0.988,
+    "zoom": 1.0035,
+    "rotate": 0.0016,
+    "warpAmount": 0.4,
+    "warpScale": 2.5,
+    "bassGain": 1.25
+  },
+  "fractalParams": {
+    "iterations": 104,
+    "escapeRadius": 4,
+    "orbitRadius": 0.31,
+    "beatMorph": 0.62
+  },
+  "motifs": {
+    "bolt": {
+      "gain": 0.85,
+      "threshold": 0.55,
+      "forkDepth": 3
+    },
+    "rose": {
+      "gain": 0.95,
+      "chromaFluxThreshold": 0.4,
+      "petals": 13
+    },
+    "glyph": {
+      "gain": 0.28,
+      "atlas": "default",
+      "emitOn": "novelty"
+    }
+  },
+  "particles": {
+    "count": 34000,
+    "curlScale": 1.9,
+    "emitBand": 5,
+    "lifetime": 3.8
+  },
+  "post": {
+    "bloomThreshold": 0.7,
+    "bloomGain": 0.5,
+    "grain": 0.03,
+    "vignette": 0.25
+  },
+  "mapping": {
+    "sub": "feedbackZoom",
+    "bass": "warpAmount",
+    "lowMid": "fractalIterations",
+    "mid": "motifOpacity",
+    "presence": "particleEmit",
+    "air": "grain",
+    "stereoWidth": "symmetry",
+    "keyHue": "paletteRotate",
+    "novelty": "fractalMorph",
+    "percussivity": "motifGain"
+  },
+  "safety": {
+    "maxLuminanceDelta": 0.08,
+    "maxBrightness": 0.85
+  }
+}

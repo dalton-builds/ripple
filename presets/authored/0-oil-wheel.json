@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "id": "oil-wheel",
+  "name": "Oil Wheel (hero)",
+  "eraId": 7,
+  "fractal": "warp_fbm",
+  "palette": {
+    "stops": [
+      "#04030A",
+      "#2A0B4A",
+      "#C21E6B",
+      "#FF7A2F",
+      "#FFE39A",
+      "#F0662A",
+      "#5B1A57",
+      "#0B1E3A",
+      "#123E63",
+      "#050810"
+    ],
+    "chromaBlend": 0.3,
+    "rotateByKey": true,
+    "spiral": 0.1
+  },
+  "feedback": {
+    "decay": 0.988,
+    "zoom": 1.0026,
+    "rotate": 0.001,
+    "warpAmount": 0.46,
+    "warpScale": 1.9,
+    "bassGain": 1.25,
+    "symmetry": 0,
+    "paintGain": 0.105,
+    "centerPull": 0.7,
+    "onsetDecay": 0.7
+  },
+  "fractalParams": {
+    "iterations": 88,
+    "escapeRadius": 4,
+    "orbitRadius": 0.26,
+    "beatMorph": 0.5,
+    "warp": 3.4,
+    "scale": 2.8,
+    "flow": 0.16,
+    "cells": 5.2,
+    "rim": 1.65,
+    "rimWidth": 2.2,
+    "iridescence": 0.55,
+    "mask": 0,
+    "octaves": 5
+  },
+  "motifs": {
+    "bolt": {
+      "gain": 0.45,
+      "threshold": 0.62,
+      "forkDepth": 2
+    },
+    "rose": {
+      "gain": 0.95,
+      "chromaFluxThreshold": 0.38,
+      "petals": 11
+    },
+    "glyph": {
+      "gain": 0,
+      "atlas": "default",
+      "emitOn": "novelty"
+    }
+  },
+  "particles": {
+    "count": 18000,
+    "curlScale": 1.35,
+    "emitBand": 5,
+    "lifetime": 4.2,
+    "size": 2.2,
+    "rise": 0.05
+  },
+  "post": {
+    "bloomThreshold": 0.36,
+    "bloomGain": 0.55,
+    "bloomTaps": 2,
+    "bloomKnee": 0.3,
+    "grain": 0.024,
+    "vignette": 0.34,
+    "exposure": 1.43,
+    "saturation": 1.55
+  },
+  "mapping": {
+    "sub": "feedbackZoom",
+    "bass": "warpAmount",
+    "lowMid": "fractalMorph",
+    "mid": "motifOpacity",
+    "presence": "particleEmit",
+    "air": "grain",
+    "stereoWidth": "none",
+    "keyHue": "paletteRotate",
+    "novelty": "feedbackDecay",
+    "percussivity": "motifGain"
+  },
+  "safety": {
+    "maxLuminanceDelta": 0.075,
+    "maxBrightness": 0.84
+  }
+}
