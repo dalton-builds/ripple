@@ -109,7 +109,8 @@ All four hot-reload from disk at runtime. Tune them without rebuilding.
 - [x] **0** — WebGL2 harness, 5 presets authored, shaders extracted, timeline recorder working
 - [x] **1** — Native shell renders all 13 presets; cross-host parity gate passes (mean SSIM
   1.0000, min 0.9998 over 780 frames x 13 presets). See "Cross-host parity gate" below.
-- [ ] **2** — WASAPI loopback + full DSP, real audio drives visuals
+- [x] **2** — WASAPI loopback + full DSP; real audio drives the visuals, 60 DSP tests
+  green, and a captured real-audio timeline replays in the harness. See "Audio and DSP".
 - [ ] **3** — SMTC metadata, era mapping, song modes, now-playing caption
 - [ ] **4** — Governor, idle states, safety limiter, budget test green
 - [ ] **5** — Tray, hotkeys, config, packaging, full preset library
@@ -271,6 +272,136 @@ Verified: on `oil-wheel` the novelty pulses drive `decay` across 0.988–0.994 (
 `+0.006` mapping range) and on `era-europe72` they drive `beatMorph` across 0.36–0.90 and
 `cells` across 3.45–6.21, each correlating with `novelty` at r = 1.000. Mode A passes on this
 fixture at 1.0000 mean / 0.9995 min.
+
+## Audio and DSP
+
+```powershell
+.\run.ps1 --audio                          # visuals driven by whatever the machine plays
+.\run.ps1 --audio --preset era-europe72
+
+# capture real features for preset work in the browser
+.\run.ps1 --record-features captures\my-capture.json --record-seconds 60
+```
+
+`--audio` opens WASAPI loopback on the default render endpoint, so it reacts to Spotify —
+or anything else the machine is playing — with no OAuth, no API key and no account. The
+synthetic driver is still the default, because it is the parity reference and it works with
+no audio at all.
+
+### Threading
+
+Plan §6, as built. The render thread never blocks on audio and never touches the ring:
+
+| Thread | Does | Never does |
+|---|---|---|
+| audio callback (NAudio) | convert to float, write the ring | allocate, log, lock |
+| analysis (`AudioEngine`) | DSP one hop at a time, publish the frame | touch GL |
+| render (`GlHost`) | read the newest published frame | wait on audio |
+
+The hand-off is a **seqlock**, not a double buffer with a volatile index: a 224-byte struct
+torn across two publishes would produce a Feature Frame that never existed — a beat phase
+that jumps, a luminance step the safety limiter reacts to. Readers retry instead.
+
+### Capture robustness
+
+§2.3 lists four failure modes. All four are handled, and the first one is the reason the
+render loop is never driven by the audio callback:
+
+| Failure | Handling |
+|---|---|
+| No callbacks at all while the endpoint is idle | Nothing downstream is callback-driven; stale audio reads as silence via a timestamp, and the watchdog does **not** treat "no data" as a fault unless the session has already delivered audio. Getting this wrong reinitialized capture every two seconds on a quiet machine. |
+| Default device changes | The watchdog compares the default endpoint's ID against the one we opened, every 250 ms. §2.3 asks for `MMDeviceEnumerator` notifications, but NAudio 3.0.1 declares `IMMNotificationClient` internal, so it cannot be implemented from outside the assembly; polling cannot be missed and needs no interop. |
+| Format varies (44.1 / 48 / 96 kHz, float32 or 16/24/32-bit PCM) | Read from the device and converted in the callback. Every bin frequency derives from the actual rate — `Sample_rate_is_read_not_assumed` drives 44.1, 48 and 96 kHz through the same band-isolation assertions. |
+| Exclusive-mode holder | Detected by HRESULT, reported as one status line, app keeps running; the watchdog keeps retrying so closing the offending app recovers on its own. |
+
+### Feature recorder — the payoff
+
+The native host writes real-audio Feature Frames in **the same timeline format the harness
+reads**. Both sides already implemented it, so this was nearly free, and it changes how
+preset work is done: capture a minute of actual Grateful Dead audio, load it in the browser
+harness, and tune against real feature data instead of slider guesses.
+
+`tests/fixtures/timeline-real-20s.json` is such a capture, and it is wired into the parity
+config as a third timeline — the only one whose feature distributions are the real thing.
+
+Recording runs on the **analysis** thread. Sampling the exchange from the render loop looks
+equivalent and is not: this GPU renders this workload at ~22 fps while the DSP publishes at
+93.8, so a render-driven recorder captured one row in four and still labelled the file
+93.8 fps. The timeline replayed four times too fast and nothing in it said so.
+
+### Cost against §11's 1%-of-a-core budget
+
+Measured, Release, 20 s of audio, per analysis hop (93.75 hops/s at 48 kHz):
+
+| | ms/hop | % of one core |
+|---|---|---|
+| Sustained loop (DspCostTests) | 0.087 | **0.81%** |
+| In the running app, this machine | 0.195 | 1.82% |
+
+The DSP's *work* is inside the budget. The gap to the in-app figure is **uniform across
+every stage** — FFT, tempo, percussivity and levels all cost about 2.2× more there — so it
+is not a hot spot: the analysis thread is idle most of the time and wakes to do a few
+hundred microseconds of work, on a core with no reason to boost. Batching three hops per
+wake recovered about 10% of it; the rest is the machine, and Phase 4 owns the perf gate.
+
+Two stages were worth optimizing and were, by **decimation rather than approximation** —
+identical values, computed less often, because both feed smoothers that are slower than the
+hop rate anyway:
+
+| Stage | Before | After | How |
+|---|---|---|---|
+| percussivity | 0.095 | 0.017 | every 4th hop (its own envelope is 120 ms), mask on every 2nd bin |
+| tempo ACF | 0.056 | 0.015 | every 4th hop; the phase accumulator still advances every hop |
+
+Watch for one trap if you change `TempoEvery`: the BPM median is sized by how often the
+estimate is *produced*, not in hops. Sizing it in hops silently turned a 2 s median into an
+8 s one and put the drift-tracking error back over budget.
+
+### Where the DSP departs from §7, and why
+
+Every one of these came out of a measurement, and the measurement is in the code comment
+next to it:
+
+| §7 says | Built as | Because |
+|---|---|---|
+| `confidence = peak / mean(acf)` | Peak of the **mean-removed, variance-normalized** autocorrelation | The ratio is tempo-biased: identical metronomes scored 3.62 at 60 BPM and 1.28 at 180, with no threshold able to accept 180 without also accepting arrhythmic clicks. As a correlation coefficient, click tracks land at 0.84–0.96 flat across the range and free time at 0.07. |
+| BPM median over 8 s | 2 s | With the 4 s autocorrelation window, 8 s put the estimate ~7 s behind a drifting tempo — 3.16 BPM against §14's own ±2 BPM requirement. The two numbers are in tension and the drift case is the Dead case. |
+| HPSS time window 5 | 17 | At a 512-sample hop, 5 frames is 53 ms — about the length of the drum hit it is meant to reject. A click filled the window and a click track measured *less* percussive than a pad. |
+| `perc = sumP / (sumP + sumH)` | Per-bin mask, then the ratio of masked energy | Summing the two medians across the spectrum does not discriminate: both sums are dominated by the window's leakage floor, and a pad and a dense mix both measured 0.42. |
+| chroma = `|X[k]|` with a log-frequency taper | Spectral **peaks** only, at parabolically interpolated frequencies | Summing every bin smears the vector across all twelve classes — a leakage skirt spans several bins, and one bin spans several semitones below 200 Hz. A C major chord came out C#/G#/A# and read as B-flat minor. |
+| bands normalized to 0..1 | Same window, plus a fitted `v^4.66` calibration and a relative gate | Two structural problems. §7.1's envelope is a peak follower, so on dense material it sits at the top of its own window and every field read ~0.4 high — presets authored in the harness would be driven flat out. And the per-band normalizer amplifies its own noise floor: a pure 1550 Hz tone lit all eight bands to 0.93 until a gate, relative to the loudest band, suppressed the ones carrying only leakage. |
+| `dynamics = peak - rms` | Crest factor in dB, normalized separately | Both inputs are already normalized against their own ranges, so on steady material both sit near the top and the difference is ~0 regardless of how peaky the audio is. |
+| novelty = cosine distance | × 2.5 | Cosine distance between two non-negative 8-vectors is confined to a small part of 0..1; a hard cut measured 0.4 and steady material under 0.09, while presets route novelty expecting the full range. |
+
+`NormalizationTests` is the guard on the last three. Its real assertion is the **aggregate**:
+a systematic scaling error moves every field the same way, and that is the failure that
+makes all 13 presets look wrong at once. Per-field tolerances are deliberately loose,
+because a per-field difference between a synthetic audio signal and a slider default is not
+evidence of anything.
+
+### What is verified, and what is not
+
+Verified here: 60 DSP tests green, including tempo lock at 60/90/120/132/150/180 BPM, a
+click track drifting ±8% over 60 s tracked within 2 BPM after converging in 0.94 s, the
+`bpmConfidence < 0.35` fallback engaging on 100% of frames of arrhythmic material with
+beat phase anti-correlating at r = −1.000 with the onset envelope, key detection on five
+triads, band isolation at three sample rates, and a real capture replaying in the harness.
+
+**Not verified: actual Spotify audio, and an actual Dead jam.** This machine had nothing to
+play, so the real-audio path was exercised with a generated WAV through the system mixer —
+genuine WASAPI loopback, genuinely captured, but the material is synthetic. Two things
+therefore remain open, and both need a human with a music library:
+
+1. **Tempo lock on real music.** On dense material with onsets on every half-beat the
+   autocorrelation prefers the subdivision, confidence stays under 0.35, and the visuals run
+   on the onset fallback rather than a beat grid. That may be correct for Drums → Space and
+   wrong for Sugar Magnolia; the click-track tests cannot tell the difference.
+2. **Band ranges on real mixes.** The captured features run high (band means 0.70–0.82),
+   which is above where the presets were authored. `LevelGamma` was fitted against a
+   synthetic signal; refit it against a real capture before deciding the presets need
+   retuning.
+
+---
 
 ## Non-negotiables
 

@@ -16,6 +16,17 @@ public sealed class RippleOptions
     public string Preset = "";
     public string Song = "";
 
+    /// <summary>
+    /// Drive the visuals from real desktop audio (WASAPI loopback) rather than from the
+    /// synthetic driver. The synthetic driver stays the parity reference and the fallback,
+    /// so this is opt-in for now; Phase 5 makes it the default.
+    /// </summary>
+    public bool Audio;
+
+    /// <summary>Record real-audio Feature Frames to this timeline file, then exit.</summary>
+    public string? RecordFeatures;
+    public double RecordSeconds = 60;
+
     /// <summary>Timeline to replay instead of the synthetic driver.</summary>
     public string? Timeline;
 
@@ -98,6 +109,9 @@ public sealed class RippleOptions
                 case "--step": o.Step = true; break;
                 case "--no-vsync": o.VSync = false; break;
                 case "--no-hot-reload": o.ShaderHotReload = false; break;
+                case "--audio": o.Audio = true; break;
+                case "--record-features": o.RecordFeatures = Next(a); o.Audio = true; break;
+                case "--record-seconds": o.RecordSeconds = double.Parse(Next(a), System.Globalization.CultureInfo.InvariantCulture); break;
                 case "--no-feedback": o.NoFeedback = true; break;
                 case "--no-grain": o.NoGrain = true; break;
                 case "--parity-mode": o.ParityMode = Next(a); break;
@@ -126,6 +140,12 @@ public sealed class RippleOptions
             }
         }
 
+        if (o.Audio && !string.IsNullOrEmpty(o.Timeline))
+            throw new ArgumentException("--audio and --timeline are alternatives: one drives "
+                + "the visuals from live capture, the other replays a recording");
+        if (o.RecordSeconds <= 0)
+            throw new ArgumentException("--record-seconds must be positive");
+
         if (o.Dump && string.IsNullOrEmpty(o.Timeline))
             throw new ArgumentException("--dump needs --timeline: the parity gate replays a recorded timeline");
         if (o.Step && string.IsNullOrEmpty(o.Timeline))
@@ -139,8 +159,11 @@ public sealed class RippleOptions
     public const string Usage = """
         Ripple — Phase 1 native shell
 
-          Ripple [--preset <id|index>] [--song <title>] [--size 960x540] [--scale 0.75]
-                 [--timeline <file.json> [--step]] [--no-vsync] [--no-hot-reload]
+          Ripple [--audio] [--preset <id|index>] [--song <title>] [--size 960x540]
+                 [--scale 0.75] [--timeline <file.json> [--step]] [--no-vsync]
+                 [--no-hot-reload]
+
+          Ripple --record-features <out.json> [--record-seconds 60]
 
           Ripple --dump --timeline <file.json> --out <dir> [--all]
                  [--parity-mode a|b] [--preset <id|index>] [--stride N]
@@ -159,5 +182,14 @@ public sealed class RippleOptions
 
         The --no-* flags remain for diagnosis, and anything given explicitly on
         the command line overrides the config.
+
+        --audio drives the visuals from WASAPI loopback on the default render
+        endpoint: whatever the machine is playing. Without it the synthetic
+        driver runs, which is what the parity gate uses and what works with no
+        audio at all.
+
+        --record-features writes real-audio Feature Frames in the same timeline
+        format the harness reads, so you can capture a minute of real music and
+        tune presets against it in the browser instead of against sliders.
         """;
 }

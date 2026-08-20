@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Ripple.Audio;
 using Ripple.Features;
 using Ripple.Presets;
 using Silk.NET.Input;
@@ -37,7 +38,10 @@ public sealed partial class GlHost : IDisposable
     private readonly Governor _governor = new();
 
     private FeatureTimeline? _timeline;
+    private AudioEngine? _audio;
+    private FeatureRecorder? _recorder;
     private FeatureFrame _frame;
+    private FeatureFrame _audioFrame;      // last frame published by the analysis thread
     private uint _ubo;
 
     private int _presetIndex;
@@ -123,6 +127,26 @@ public sealed partial class GlHost : IDisposable
             Console.WriteLine($"[timeline] {_timeline.Count} frames @ {_timeline.Rate} fps from {_opt.Timeline}");
         }
 
+        if (_opt.Audio)
+        {
+            _audio = new AudioEngine();
+            _audio.Start();
+
+            _recordStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (!string.IsNullOrEmpty(_opt.RecordFeatures))
+            {
+                // Record at the DSP's own frame rate, not the display's: one row per
+                // analysis hop is what the timeline format means, and it makes the capture
+                // independent of however fast this machine happens to render.
+                var fmt = _audio.Format ?? new AudioFormat(48_000, 2);
+                _recorder = new FeatureRecorder(fmt.FrameRate, _opt.RecordSeconds);
+                _audio.AttachRecorder(_recorder);
+                Console.WriteLine($"[record] {_opt.RecordSeconds:0.#}s at {fmt.FrameRate:0.#} fps "
+                    + $"-> {_opt.RecordFeatures}");
+                Console.WriteLine("[record] play something now; the window shows what is being captured");
+            }
+        }
+
         _governor.SetLevel(0);
         _chain.Resize(_opt.Width, _opt.Height, _renderScale);
 
@@ -146,6 +170,12 @@ public sealed partial class GlHost : IDisposable
 
     private void OnClosing()
     {
+        // Audio first: the capture and analysis threads must stop before the GL objects
+        // they feed go away.
+        if (_audio is not null) ReportDspCost();
+        _audio?.Dispose();
+        _audio = null;
+
         _input?.Dispose();
         _chain?.Dispose();
         _particles?.Dispose();
@@ -237,6 +267,21 @@ public sealed partial class GlHost : IDisposable
             _stepRow = i;
             _timeline.CopyRow(i, f);
         }
+        else if (_audio is not null)
+        {
+            // The render thread never blocks on audio: it takes whatever the analysis
+            // thread last published, and holds the previous frame if nothing is ready.
+            if (_audio.TryReadFrame(ref _audioFrame))
+                _audioFrame.AsSpan().CopyTo(f);
+
+            // §11: stale audio is silence. The capture may legitimately deliver no
+            // callbacks at all while the endpoint is idle, so an absent frame must not
+            // freeze the visuals mid-gesture — it must decay them.
+            if (_audio.Idle) DecayTowardSilence(f, dt);
+
+            // The preset's era still comes from the preset until Phase 3 wires up SMTC.
+            f[FF.Era] = _preset.EraId;
+        }
         else
         {
             _synth.Fill(f, dt, _tSec);
@@ -281,12 +326,101 @@ public sealed partial class GlHost : IDisposable
         _chain.Render(_draw, _host);
     }
 
+    /// <summary>
+    /// §11's idle behaviour, on the feature side: ramp the reactive fields down rather than
+    /// freezing them. A held frame would leave the visuals mid-gesture — a bolt half struck,
+    /// a bloom at full — which reads as a hang rather than as silence.
+    /// </summary>
+    private static void DecayTowardSilence(Span<float> f, double dt)
+    {
+        float k = (float)Math.Exp(-dt / 0.5);
+        for (int i = FF.Rms; i <= FF.Air; i++) f[i] *= k;
+        f[FF.Flux] *= k;
+        f[FF.Onset] *= k;
+        f[FF.ChromaFlux] *= k;
+        f[FF.Novelty] *= k;
+        f[FF.BpmConf] *= k;
+    }
+
+    /// <summary>
+    /// Give up waiting rather than hanging. If nothing is playing there will be no frames
+    /// at all, and a recorder that waits forever for them looks like a hung app — the
+    /// endpoint may legitimately never deliver a callback (§2.3, failure mode 1).
+    /// </summary>
+    private void CheckRecordingDeadline()
+    {
+        if (_recorder is null || _recordingDone || _recordStart == 0) return;
+
+        // The recorder is filled by the analysis thread; the render loop only watches.
+        if (_recorder.Full) { FinishRecording("complete"); return; }
+
+        double elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(_recordStart).TotalSeconds;
+        double budget = _opt.RecordSeconds * 3 + 10;
+        if (elapsed < budget) return;
+
+        FinishRecording(_recorder.Count == 0
+            ? "no audio was captured — is anything playing?"
+            : "deadline reached before the requested length");
+    }
+
+    private void FinishRecording(string why)
+    {
+        if (_recordingDone) return;
+        _recordingDone = true;
+
+        if (_recorder!.Count == 0)
+        {
+            Console.Error.WriteLine($"[record] nothing recorded: {why}");
+            _window.Close();
+            return;
+        }
+
+        {
+            var fmt = _audio!.Format ?? new AudioFormat(48_000, 2);
+            _recorder.Write(_opt.RecordFeatures!,
+                $"Captured from {_audio.DeviceName} via WASAPI loopback, one row per "
+                + $"analysis hop. Dropped {_audio.DroppedSamples} samples to ring overrun.",
+                fmt, _audio.DeviceName);
+            Console.WriteLine($"[record] wrote {_recorder.Count} frames "
+                + $"({_recorder.Seconds:0.#}s) to {_opt.RecordFeatures} — {why}");
+            if (_audio.DroppedSamples > 0)
+                Console.WriteLine($"[record] {_audio.DroppedSamples} samples were dropped to "
+                    + "ring overrun: the analysis thread could not keep up with capture.");
+            Console.WriteLine("[record] done — closing");
+            _window.Close();
+        }
+    }
+
+    private bool _recordingDone;
+    private long _recordStart;
+
+    /// <summary>
+    /// §11 budgets the analysis chain at "under 1% of one core". Print what it actually
+    /// cost, rather than asserting it in a comment.
+    /// </summary>
+    private void ReportDspCost()
+    {
+        var a = _audio!;
+        if (a.AnalyzedFrames == 0)
+        {
+            Console.WriteLine("[dsp] no audio was analyzed");
+            return;
+        }
+        Console.WriteLine($"[dsp] {a.AnalyzedFrames} hops, {a.DspMsPerHop:F3} ms/hop, "
+            + $"{a.DspCoreFraction * 100:F2}% of one core "
+            + $"(budget 1.00%), {a.DroppedSamples} samples dropped, "
+            + $"{a.Restarts} capture restart(s)");
+        foreach (var (name, ms) in a.StageCostMs())
+            Console.WriteLine($"[dsp]   {name,-14} {ms,8:F4} ms/hop");
+    }
+
     private void OnRender(double _)
     {
         if (_opt.Dump) return;   // the dump loop drives itself
 
         _shaders.PollReload();
         _presets.PollReload();
+        CheckRecordingDeadline();
 
         double dt;
         if (_timeline is not null && _opt.Step)

@@ -56,7 +56,13 @@
         "presets": 13,
         "frames": 780,
         "harness": "ANGLE / Direct3D11, Intel UHD, RGBA16F",
-        "native": "OpenGL 4.3, Intel UHD, RGBA16F"
+        "native": "OpenGL 4.3, Intel UHD, RGBA16F",
+        "realAudioTimeline": {
+          "note": "Same gate re-run on tests/fixtures/timeline-real-20s.json, whose features came from the Phase 2 DSP on live capture rather than from a driver.",
+          "mean": 0.9999,
+          "min": 0.9974,
+          "frames": 1222
+        }
       }
     },
     "b": {
@@ -84,6 +90,11 @@
       "path": "tests/fixtures/timeline-novelty.json",
       "role": "coverage",
       "why": "Constructed, not recorded. Fires novelty deliberately so the novelty->fractalMorph and novelty->feedbackDecay mappings are exercised; the primary timeline never fires one."
+    },
+    {
+      "path": "tests/fixtures/timeline-real-20s.json",
+      "role": "real-audio",
+      "why": "Captured from WASAPI loopback by the Phase 2 DSP, one row per analysis hop at 93.75 fps. The only fixture whose feature distributions are the real thing rather than a driver's idea of them, so it is what catches a shader that only looks right on synthetic input."
     }
   ]
 }
