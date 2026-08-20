@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Same TFM as the app: the tests link the real host assembly, and the
+         std140 round-trip needs a real GL context rather than a mock. -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <RootNamespace>Ripple.Tests</RootNamespace>
+    <!-- The std140 probe allocates a float target with TexImage2D(..., null). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="*" />
+    <PackageReference Include="xunit" Version="*" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Ripple\Ripple.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The GL probe includes the REAL shaders/common/features.glsl. A copy
+         would defeat the point of the test: the thing under test is whether
+         that exact file's std140 block matches the C# struct. -->
+    <Content Include="..\..\shaders\**\*" LinkBase="shaders" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

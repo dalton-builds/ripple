@@ -1,0 +1,365 @@
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using Ripple.Features;
+using Ripple.Presets;
+using Silk.NET.Input;
+using Silk.NET.Maths;
+using Silk.NET.OpenGL;
+using Silk.NET.Windowing;
+
+namespace Ripple.Render;
+
+/// <summary>
+/// The window, the GL 4.3 core context, and the frame loop.
+///
+/// Phase 1 scope: shaders, presets, the feedback chain, the Feature Frame UBO,
+/// timeline replay and the synthetic driver. No audio, no DSP, no SMTC —
+/// those are Phases 2 and 3, and the whole point of the synthetic driver is
+/// that none of them are needed to finish this one.
+/// </summary>
+public sealed partial class GlHost : IDisposable
+{
+    private readonly RippleOptions _opt;
+
+    private IWindow _window = null!;
+    private GL _gl = null!;
+    private IInputContext? _input;
+
+    private ShaderLoader _shaders = null!;
+    private PaletteLut _palette = null!;
+    private ParticleSystem _particles = null!;
+    private FeedbackChain _chain = null!;
+    private PresetStore _presets = null!;
+
+    private readonly DrawState _draw = new();
+    private readonly HostState _host = new();
+    private readonly SyntheticDriver _synth = new();
+    private readonly Governor _governor = new();
+
+    private FeatureTimeline? _timeline;
+    private FeatureFrame _frame;
+    private uint _ubo;
+
+    private int _presetIndex;
+    private PresetValues _preset = null!;
+
+    private double _tSec;
+    private long _frameNo;
+    private double _renderScale;
+    private double _lastFrameMs;
+    private bool _paused;
+
+    /// <summary>Index of the timeline row the current frame was built from, or -1.</summary>
+    private int _stepRow = -1;
+    private int _stepNext;
+
+    public GlHost(RippleOptions options)
+    {
+        _opt = options;
+        _renderScale = options.RenderScale;
+    }
+
+    // ------------------------------------------------------------------ run
+
+    public void Run()
+    {
+        var api = new GraphicsAPI(ContextAPI.OpenGL, ContextProfile.Core,
+            ContextFlags.ForwardCompatible, new APIVersion(4, 3));
+
+        var wo = WindowOptions.Default with
+        {
+            Size = new Vector2D<int>(_opt.Width, _opt.Height),
+            Title = "Ripple",
+            API = api,
+            VSync = _opt.VSync && !_opt.Dump,
+            IsVisible = !_opt.Dump,
+            WindowBorder = WindowBorder.Resizable,
+            ShouldSwapAutomatically = true,
+        };
+
+        _window = Window.Create(wo);
+        _window.Load += OnLoad;
+        _window.Render += OnRender;
+        _window.FramebufferResize += OnFramebufferResize;
+        _window.Closing += OnClosing;
+        _window.Run();
+    }
+
+    private void OnLoad()
+    {
+        _gl = GL.GetApi(_window);
+
+        Console.WriteLine($"[gl] {_gl.GetStringS(StringName.Version)}");
+        Console.WriteLine($"[gl] {_gl.GetStringS(StringName.Renderer)}");
+
+        // Desktop GL gates gl_PointSize behind this; GLES enables it always.
+        // Without it the particle layer renders as single pixels and the parity
+        // diff fails for a reason that has nothing to do with the shaders.
+        _gl.Enable(EnableCap.ProgramPointSize);
+        _gl.Disable(EnableCap.DepthTest);
+        _gl.Disable(EnableCap.CullFace);
+        _gl.PixelStore(PixelStoreParameter.PackAlignment, 1);
+        _gl.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
+
+        _shaders = new ShaderLoader(_gl, _opt.ShaderRoot);
+        _shaders.ReloadFailed += msg => Console.Error.WriteLine($"[shaders] reload failed, keeping previous:\n{msg}");
+        _shaders.Reloaded += () => Console.WriteLine("[shaders] reloaded");
+
+        _palette = new PaletteLut(_gl);
+        _particles = new ParticleSystem(_gl);
+        _chain = new FeedbackChain(_gl, _shaders, _palette, _particles);
+
+        _presets = new PresetStore(_opt.PresetRoot, _opt.DataRoot);
+        if (_presets.Library.Count == 0)
+            throw new InvalidOperationException($"no presets found under {_opt.PresetRoot}");
+        _presets.Reloaded += () => { SelectPreset(_presetIndex); Console.WriteLine("[presets] reloaded"); };
+
+        CreateUniformBuffer();
+        SelectPreset(ResolvePresetIndex(_opt.Preset));
+
+        if (!string.IsNullOrEmpty(_opt.Timeline))
+        {
+            _timeline = FeatureTimeline.Load(_opt.Timeline);
+            Console.WriteLine($"[timeline] {_timeline.Count} frames @ {_timeline.Rate} fps from {_opt.Timeline}");
+        }
+
+        _governor.SetLevel(0);
+        _chain.Resize(_opt.Width, _opt.Height, _renderScale);
+
+        if (_opt.ShaderHotReload && !_opt.Dump)
+        {
+            _shaders.WatchForChanges();
+            _presets.WatchForChanges();
+            Console.WriteLine("[watch] shaders/ and presets/ hot-reload on save");
+        }
+
+        if (_opt.Dump)
+        {
+            RunDump();
+            _window.Close();
+            return;
+        }
+
+        SetUpInput();
+        Console.WriteLine($"[ripple] {_preset.Id} · {_chain.ResolvedFamily} · {_opt.Width}x{_opt.Height} @ {_renderScale:0.##}x");
+    }
+
+    private void OnClosing()
+    {
+        _input?.Dispose();
+        _chain?.Dispose();
+        _particles?.Dispose();
+        _palette?.Dispose();
+        _shaders?.Dispose();
+        _presets?.Dispose();
+        if (_ubo != 0) _gl.DeleteBuffer(_ubo);
+    }
+
+    // --------------------------------------------------------------- the UBO
+
+    private void CreateUniformBuffer()
+    {
+        if (Marshal.SizeOf<FeatureFrame>() != FeatureFrame.ByteSize)
+            throw new InvalidOperationException(
+                $"FeatureFrame is {Marshal.SizeOf<FeatureFrame>()} bytes, contract says {FeatureFrame.ByteSize}");
+
+        _ubo = _gl.GenBuffer();
+        _gl.BindBuffer(BufferTargetARB.UniformBuffer, _ubo);
+        unsafe
+        {
+            _gl.BufferData(BufferTargetARB.UniformBuffer, FeatureFrame.ByteSize, null, BufferUsageARB.DynamicDraw);
+        }
+        // CONTRACTS §1: binding point 0. The shaders declare
+        // layout(std140, binding = 0) directly — this host does not define
+        // RIPPLE_WEBGL, so no glUniformBlockBinding call is needed.
+        _gl.BindBufferBase(BufferTargetARB.UniformBuffer, 0, _ubo);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private Span<float> FrameSpan()
+        => MemoryMarshal.CreateSpan(ref Unsafe.As<FeatureFrame, float>(ref _frame), FeatureFrame.FloatCount);
+
+    private void UploadFeatureFrame()
+    {
+        var f = FrameSpan();
+        f[52] = f[53] = f[54] = f[55] = 0;   // uReserved MUST be zero-filled
+        _gl.BindBuffer(BufferTargetARB.UniformBuffer, _ubo);
+        unsafe
+        {
+            fixed (float* p = f)
+                _gl.BufferSubData(BufferTargetARB.UniformBuffer, 0, FeatureFrame.ByteSize, p);
+        }
+    }
+
+    // ------------------------------------------------------------- presets
+
+    private int ResolvePresetIndex(string spec)
+    {
+        if (string.IsNullOrWhiteSpace(spec)) return 0;
+        if (int.TryParse(spec, out int n) && n >= 0 && n < _presets.Library.Count) return n;
+        int byId = _presets.IndexOf(spec);
+        if (byId >= 0) return byId;
+        Console.Error.WriteLine($"[presets] no preset '{spec}', falling back to index 0");
+        return 0;
+    }
+
+    private void SelectPreset(int index)
+    {
+        _presetIndex = Math.Clamp(index, 0, _presets.Library.Count - 1);
+        _preset = _presets.Resolve(_presetIndex, _opt.Song);
+        _palette.Build(_preset.PaletteStops);
+        // The era id rides in the Feature Frame so shaders can branch on it.
+        // On timeline replay the recorded value wins, exactly as in the harness.
+        FrameSpan()[FF.Era] = _preset.EraId;
+    }
+
+    // ------------------------------------------------------------ the frame
+
+    /// <summary>
+    /// Assemble the Feature Frame. On replay the timeline is authoritative for
+    /// everything the DSP owns; the host still owns time and resolution.
+    /// </summary>
+    private void BuildFeatureFrame(double dt)
+    {
+        var f = FrameSpan();
+
+        if (_timeline is not null && _opt.Step)
+        {
+            _stepRow = Math.Min(_stepNext, Math.Max(0, _timeline.Count - 1));
+            _timeline.CopyRow(_stepRow, f);
+            _stepNext = Math.Min(_stepNext + 1, _timeline.Count);
+        }
+        else if (_timeline is not null)
+        {
+            // Interpolation-free but time-driven: useful for eyeballing a
+            // recording at display rate. Never used for the parity diff.
+            int i = (int)(_tSec * _timeline.Rate) % Math.Max(1, _timeline.Count);
+            _stepRow = i;
+            _timeline.CopyRow(i, f);
+        }
+        else
+        {
+            _synth.Fill(f, dt, _tSec);
+        }
+
+        var rt = _chain.Targets;
+        f[FF.Time] = (float)_tSec;
+        f[FF.Dt] = (float)dt;
+        f[FF.Width] = rt.W;
+        f[FF.Height] = rt.H;
+        f[FF.Aspect] = rt.W / (float)Math.Max(rt.H, 1);
+        f[FF.RenderScale] = (float)_renderScale;
+        f[52] = f[53] = f[54] = f[55] = 0;
+    }
+
+    /// <summary>Everything between "frame assembled" and "pixels drawn".</summary>
+    private void DrawFrame(double dt)
+    {
+        var f = FrameSpan();
+        UploadFeatureFrame();
+
+        _draw.Reset(_preset);
+        _draw.ApplyMapping(_preset, f);
+        _governor.Apply(_draw);
+
+        // Mode A drops the film grain along with the feedback carry. Both are
+        // terms that cannot agree across two GL implementations by
+        // construction: the feedback compounds, and the grain is a fract-chain
+        // hash of vUv whose value is chaotic in the last bit of its input, so
+        // an FMA contracted one way by the D3D compiler and another by the GL
+        // driver decorrelates it completely.
+        //
+        // It carries no shader-math information — it is dither — but with the
+        // feedback cleared the frame is dim enough that the grain becomes most
+        // of the variance, and SSIM then measures noise against noise. Zeroing
+        // it here is what makes the strict gate a test of the shaders.
+        if (_opt.NoFeedback) _draw.Grain = 0;
+        if (_opt.NoParticles) _draw.PCount = 0;
+        _host.AdvanceMotifs(dt, _draw, f);
+        _host.AdvancePalette(dt, _draw, _preset.RotateByKey, f);
+
+        _chain.Render(_draw, _host);
+    }
+
+    private void OnRender(double _)
+    {
+        if (_opt.Dump) return;   // the dump loop drives itself
+
+        _shaders.PollReload();
+        _presets.PollReload();
+
+        double dt;
+        if (_timeline is not null && _opt.Step)
+        {
+            // Step mode on screen: one row per displayed frame, dt pinned to
+            // the recording's rate. Same path the dump takes, so what you watch
+            // is what lands in the PNGs.
+            dt = 1.0 / _timeline.Rate;
+            _tSec = _stepNext / _timeline.Rate;
+        }
+        else
+        {
+            dt = Math.Clamp(_window.Time - _tSec, 0.0004, 0.05);
+        }
+
+        if (_paused) { _chain.Present(_window.FramebufferSize.X, _window.FramebufferSize.Y); return; }
+
+        var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        BuildFeatureFrame(dt);
+        DrawFrame(dt);
+
+        long cadence = (_timeline is not null && _opt.Step) ? _stepRow : _frameNo;
+        if (cadence % 3 == 0)
+            _host.MeasureLuminance(_gl, _chain.Targets, dt * 3, _tSec, _draw);
+
+        _chain.Present(_window.FramebufferSize.X, _window.FramebufferSize.Y);
+
+        _lastFrameMs = System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
+        if (!(_timeline is not null && _opt.Step)) _tSec += dt;
+        _frameNo++;
+    }
+
+    private void OnFramebufferResize(Vector2D<int> size)
+    {
+        if (size.X <= 0 || size.Y <= 0) return;
+        if (_opt.Dump) return;   // a dump pins its own grid
+        _chain.Resize(size.X, size.Y, _renderScale);
+    }
+
+    // --------------------------------------------------------------- input
+
+    private void SetUpInput()
+    {
+        _input = _window.CreateInput();
+        foreach (var kb in _input.Keyboards) kb.KeyDown += OnKeyDown;
+    }
+
+    private void OnKeyDown(IKeyboard kb, Key key, int _)
+    {
+        switch (key)
+        {
+            case Key.Escape:
+                _window.Close();
+                break;
+            case Key.Right:
+                SelectPreset((_presetIndex + 1) % _presets.Library.Count);
+                Console.WriteLine($"[preset] {_preset.Id} — {_preset.Name}");
+                break;
+            case Key.Left:
+                SelectPreset((_presetIndex - 1 + _presets.Library.Count) % _presets.Library.Count);
+                Console.WriteLine($"[preset] {_preset.Id} — {_preset.Name}");
+                break;
+            case Key.Space:
+                _paused = !_paused;
+                break;
+            case Key.D:
+                Console.WriteLine($"[hud] {_preset.Id} · {_chain.ResolvedFamily} · "
+                    + $"{_chain.Targets.Pw}x{_chain.Targets.Ph} · {_lastFrameMs:0.00} ms · "
+                    + $"decay {_draw.Decay:0.0000} · limiter {_host.SafeScale:0.000} · flash {_host.FlashRate:0.0} Hz");
+                break;
+        }
+    }
+
+    public void Dispose() => _window?.Dispose();
+}

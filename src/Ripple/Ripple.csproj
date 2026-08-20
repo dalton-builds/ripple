@@ -27,7 +27,8 @@
 
     <AssemblyName>Ripple</AssemblyName>
     <RootNamespace>Ripple</RootNamespace>
-    <ApplicationIcon>..\..\assets\ripple.ico</ApplicationIcon>
+    <!-- The icon lands in Phase 5. Conditioned so a missing file is not a build error. -->
+    <ApplicationIcon Condition="Exists('$(MSBuildProjectDirectory)\..\..\assets\ripple.ico')">..\..\assets\ripple.ico</ApplicationIcon>
 
     <!-- DO NOT enable PublishAot. CsWinRT projection + AOT trimming is a known
          source of obscure runtime failures, and trimmed self-contained R2R
@@ -53,6 +54,14 @@
          session-event plumbing proves fiddly.
     <PackageReference Include="Dubya.WindowsMediaController" Version="*" />
     -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The std140 round-trip test links a probe program through
+         ShaderProgram.Link, which is internal because nothing outside the
+         renderer should be building programs. Widening it to public for the
+         test's sake would be the wrong trade. -->
+    <InternalsVisibleTo Include="Ripple.Tests" />
   </ItemGroup>
 
   <ItemGroup>

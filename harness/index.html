@@ -1251,6 +1251,44 @@ void main() {
 'use strict';
 var RENDER_SCALE = 0.75;
 
+/* --- deterministic PRNG (mulberry32) ---------------------------------------
+   Anything that seeds geometry has to be reproducible, or the Phase 1 parity
+   gate is a coin toss rather than a test. Both hosts implement this exactly:
+   uint32 arithmetic, 2^-32 scaling, identical call order. The C# mirror lives
+   in src/Ripple/Render/Mulberry32.cs. ------------------------------------- */
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const RNG_PARTICLE_SEED = 0x9E3779B9;   // SHARED CONSTANT - changing it breaks parity
+const RNG_MOTIF_SEED    = 0x1B873593;   // SHARED CONSTANT - changing it breaks parity
+let rngMotif = mulberry32(RNG_MOTIF_SEED);
+
+/* --- parity / deterministic step replay ------------------------------------
+   PARITY.lock pins the drawing buffer to a fixed size and freezes the render
+   scale, so both hosts rasterize the same grid. Everything else that has to be
+   reset for a run lives in tlStepBegin(). --------------------------------- */
+const PARITY = { lock: false, w: 960, h: 540, scale: 0.75, busy: false, stride: 10,
+  /* noFeedback is gate mode A. The renderer is a feedback renderer: each frame
+     warps the previous frame's buffer, so a difference of one ulp between two
+     GL implementations does not stay one ulp — it compounds, and by frame 600
+     two byte-identical shaders legitimately render visibly different images.
+     Clearing the chain every frame removes the accumulation, leaving the
+     shader math alone under test. That is the only form of this diff that can
+     honestly be a pass/fail gate. */
+  noFeedback: false,
+  /* Diagnostic, not part of either mode: drop the particle layer. Particles are
+     GL_POINTS, and sub-pixel point rasterization is not specified tightly
+     enough for two implementations to agree — ANGLE expands sized points to
+     quads on D3D11 where desktop GL rasterizes them natively. Toggling this
+     separates "a particle landed a pixel over" from "the shaders disagree". */
+  noParticles: false };
+
 /* --- virtual shader filesystem. Keys are the authoritative paths from the
    FILE: fences above; tools/extract-shaders.mjs writes exactly these. ----- */
 const SHADER_FS = {
@@ -1583,8 +1621,12 @@ const partVao = gl.createVertexArray();
 {
   const seeds = new Float32Array(PARTICLE_MAX * 2);
   const idx = new Float32Array(PARTICLE_MAX);
+  // Seeded, not Math.random(): the native host fills the identical buffer from
+  // the same PRNG in the same order, so the particle field matches frame for
+  // frame instead of merely looking similar.
+  const prand = mulberry32(RNG_PARTICLE_SEED);
   for (let i = 0; i < PARTICLE_MAX; i++) {
-    seeds[i * 2] = Math.random(); seeds[i * 2 + 1] = Math.random(); idx[i] = i;
+    seeds[i * 2] = prand(); seeds[i * 2 + 1] = prand(); idx[i] = i;
   }
   gl.bindVertexArray(partVao);
   const b0 = gl.createBuffer();
@@ -2176,7 +2218,12 @@ function useSynth() { stopSource(); A.mode = 'synth'; A.status = 'synthetic driv
 
 const TL = {
   rec: false, frames: [], rate: 60, seconds: 20, t0: 0, acc: 0,
-  play: false, data: null, pt: 0, name: ''
+  play: false, data: null, pt: 0, name: '',
+  // --- exact frame-stepping mode (the parity gate) ---
+  // step:      one timeline row per rendered frame, no interpolation
+  // stepFrame: index of the NEXT row to render
+  // cur:       index of the row the current frame was built from
+  step: false, stepFrame: 0, cur: -1, ended: false
 };
 
 function tlStart(seconds, rate) {
@@ -2206,7 +2253,10 @@ function tlExport() {
     frameBytes: FEATURE_BYTES,
     note: 'frames[i] is the 56-float std140 FeatureFrame in declaration order. '
         + 'Replay one row per frame, upload verbatim, and both hosts see an '
-        + 'identical timeline (plan §15 phase 1 gate).',
+        + 'identical timeline (plan §15 phase 1 gate). Replay in STEP mode, not '
+        + 'the interpolated player: dt is exactly 1/rate and time is i/rate. '
+        + 'Indices 0,1,48,49,50,51 (uTime.xy, uRes) are owned by the host and '
+        + 'are overwritten on replay; every other field is uploaded verbatim.',
     fieldOrder: FIELD_ORDER,
     frames: TL.frames
   };
@@ -2218,15 +2268,40 @@ function tlLoad(json) {
     throw new Error('frame width ' + json.frames[0].length + ', expected ' + FEATURE_FLOATS);
   TL.data = json; TL.pt = 0; TL.play = true;
 }
+/* Two modes, and the difference is the whole point of this file.
+
+   STEP (TL.step) - timeline frame i maps to render frame i. One row per frame,
+   copied verbatim: no interpolation, no wraparound. Playback holds on the last
+   row rather than looping back into frame 0 against a full feedback buffer.
+   This is the mode tlExport()'s own note specifies, and the only one a
+   cross-host frame diff can use, because it takes wall-clock time out of the
+   result entirely.
+
+   INTERPOLATED (default) - advances by dt * rate and lerps between rows. Right
+   for eyeballing a timeline at whatever rate the display happens to run at,
+   wrong for a diff: any frame-rate difference between the hosts changes every
+   sampled value. */
 function tlTick(dt) {
   if (!TL.play || !TL.data) return false;
   const n = TL.data.frames.length;
   if (!n) return false;
+
+  if (TL.step) {
+    const i = Math.min(TL.stepFrame, n - 1);
+    TL.cur = i;
+    TL.ended = TL.stepFrame >= n - 1;
+    const a = TL.data.frames[i];
+    for (let k = 0; k < FEATURE_FLOATS; k++) F[k] = a[k];
+    TL.stepFrame = Math.min(TL.stepFrame + 1, n);
+    return true;
+  }
+
   TL.pt += dt * TL.data.rate;
   if (TL.pt >= n) TL.pt -= n;
   const i0 = Math.floor(TL.pt) % n, i1 = (i0 + 1) % n, k = TL.pt - Math.floor(TL.pt);
   const a = TL.data.frames[i0], b = TL.data.frames[i1];
   for (let i = 0; i < FEATURE_FLOATS; i++) F[i] = a[i] + (b[i] - a[i]) * k;
+  TL.cur = i0;
   return true;
 }
 
@@ -2720,7 +2795,7 @@ function refreshDriver() {
 /* ========================================================================== */
 /*  12. TIMELINE                                                              */
 /* ========================================================================== */
-let tlKv = {}, tlBar, tlSeconds, tlRate, tlRecBtn;
+let tlKv = {}, tlBar, tlSeconds, tlRate, tlRecBtn, tlW, tlH, tlStride, tlStepBtn, tlFbBtn;
 {
   const b = section('FEATURE TIMELINE', 'parity gate', false);
   hint(b, 'Record the Feature Frame to JSON, replay it on the native host, diff '
@@ -2761,6 +2836,51 @@ let tlKv = {}, tlBar, tlSeconds, tlRate, tlRecBtn;
   tlKv.frames = kv(b, 'frames captured');
   tlKv.bytes = kv(b, 'frame size');
   tlKv.bytes.textContent = FEATURE_BYTES + ' B';
+
+  /* --- deterministic replay + batch dump -------------------------------- */
+  hint(b, '<b>STEP</b> replays one row per rendered frame with dt fixed at '
+        + '1/rate and no interpolation \u2014 the mode the native host mirrors. It '
+        + 'also pins the drawing buffer, freezes the governor at tier 0, clears '
+        + 'the feedback chain and reseeds every host-side RNG, so two runs of '
+        + 'the same timeline are comparable frame for frame. <b>DUMP</b> renders '
+        + 'every frame and writes every Nth to PNG \u2014 into a directory you pick, '
+        + 'or a .zip if the browser has no File System Access API.');
+  const r3 = E('div', 'row');
+  r3.appendChild(E('label', null, 'dump size'));
+  tlW = E('input'); tlW.type = 'number'; tlW.min = 64; tlW.max = 1920; tlW.value = PARITY.w;
+  tlH = E('input'); tlH.type = 'number'; tlH.min = 64; tlH.max = 1080; tlH.value = PARITY.h;
+  r3.appendChild(tlW); r3.appendChild(tlH);
+  b.appendChild(r3);
+  const r4 = E('div', 'row');
+  r4.appendChild(E('label', null, 'stride'));
+  tlStride = E('input'); tlStride.type = 'number'; tlStride.min = 1; tlStride.max = 600; tlStride.value = PARITY.stride;
+  r4.appendChild(tlStride); r4.appendChild(E('div', 'num', 'th frame'));
+  b.appendChild(r4);
+  const br2 = E('div', 'btnrow');
+  tlStepBtn = btn(br2, 'STEP', () => {
+    if (!TL.data) return toast('no timeline loaded');
+    if (TL.step) { parityStepEnd(); }
+    else { PARITY.w = +tlW.value; PARITY.h = +tlH.value; tlStepBegin(); }
+    tlStepBtn.classList.toggle('on', TL.step);
+    syncSourceUi();
+    toast(TL.step ? 'step mode: 1 row = 1 frame' : 'step mode off');
+  }, 'exact frame stepping: timeline frame i renders as frame i');
+  tlFbBtn = btn(br2, 'MODE A', () => {
+    PARITY.noFeedback = !PARITY.noFeedback;
+    tlFbBtn.classList.toggle('on', PARITY.noFeedback);
+    toast(PARITY.noFeedback
+      ? 'mode A: feedback cleared every frame (strict gate)'
+      : 'mode B: full feedback (informational)');
+  }, 'gate mode A: clear the feedback chain every frame so the diff tests shader math with no accumulation');
+  const dumpOpts = () => ({ stride: +tlStride.value, w: +tlW.value, h: +tlH.value,
+                            noFeedback: PARITY.noFeedback });
+  btn(br2, 'DUMP', () => parityDump(Object.assign({ all: false }, dumpOpts())),
+      'render the whole timeline on the active preset, write every Nth frame');
+  btn(br2, 'DUMP ALL', () => parityDump(Object.assign({ all: true }, dumpOpts())),
+      'the same for every preset in the library - this is the parity gate');
+  b.appendChild(br2);
+  tlKv.step = kv(b, 'step frame');
+  tlKv.dump = kv(b, 'dump');
 }
 
 /* ========================================================================== */
@@ -2869,7 +2989,7 @@ function govApply() {
    measures submission, not the GPU. The honest signal available in a browser
    is the rAF interval: if the GPU cannot keep up, the interval stretches. */
 function govTick(dt) {
-  if (!GOV.auto) return;
+  if (!GOV.auto || PARITY.lock) return;
   GOV.dwell += dt;
   // Warm-up frames and backgrounded-tab gaps are not GPU slowness. Feeding
   // them to the controller drops quality permanently on the first frame.
@@ -3010,12 +3130,12 @@ function advanceMotifs(dt) {
   MOT.rose *= Math.exp(-dt / 1.15);
   MOT.roseCool -= dt;
   if (F[38] > D.roseThreshold && MOT.roseCool <= 0) {
-    MOT.rose = 1; MOT.roseSeed = Math.random() * 90; MOT.roseCool = 0.85;
+    MOT.rose = 1; MOT.roseSeed = rngMotif() * 90; MOT.roseCool = 0.85;
   }
   MOT.bolt *= Math.exp(-dt / 0.155);
   MOT.boltCool -= dt;
   if (F[17] > 0.82 && F[23] > D.boltThreshold && MOT.boltCool <= 0) {
-    MOT.bolt = 1; MOT.boltSeed = Math.random() * 90; MOT.boltCool = 0.14;
+    MOT.bolt = 1; MOT.boltSeed = rngMotif() * 90; MOT.boltCool = 0.14;
   }
 }
 
@@ -3247,6 +3367,12 @@ function updateReadouts(now) {
   tlKv.frames.textContent = TL.frames.length + (TL.rec ? ' \u25cf' : '');
   tlBar.firstChild.style.width = (100 * Math.min(1, TL.frames.length / Math.max(1, TL.seconds * TL.rate))) + '%';
   if (!TL.rec && tlRecBtn.classList.contains('on')) tlRecBtn.classList.remove('on');
+  if (tlStepBtn) tlStepBtn.classList.toggle('on', TL.step);
+  if (tlKv.step) {
+    tlKv.step.textContent = TL.step
+      ? (TL.cur + 1) + ' / ' + (TL.data ? TL.data.frames.length : 0) + (TL.ended ? '  end' : '')
+      : (TL.play ? 'interpolated' : 'off');
+  }
 
   if (!hudEl.classList.contains('off')) {
     hudRows.fam.textContent = D.fractal;
@@ -3269,12 +3395,20 @@ function updateReadouts(now) {
 const MAX_PIXELS = 1280 * 720;
 function resize(force) {
   const st = document.getElementById('stage');
-  let dpr = Math.min(window.devicePixelRatio || 1, 1.25);
-  let w = Math.max(64, Math.round(st.clientWidth * dpr));
-  let h = Math.max(64, Math.round(st.clientHeight * dpr));
-  if (w * h > MAX_PIXELS) {
-    const k = Math.sqrt(MAX_PIXELS / (w * h));
-    w = Math.max(64, Math.round(w * k)); h = Math.max(64, Math.round(h * k));
+  let w, h;
+  if (PARITY.lock) {
+    // Parity runs rasterize a fixed grid. Stage size, device pixel ratio and
+    // the pixel budget all have to stop mattering here, or the diff measures
+    // the browser window rather than the shaders.
+    w = PARITY.w; h = PARITY.h;
+  } else {
+    let dpr = Math.min(window.devicePixelRatio || 1, 1.25);
+    w = Math.max(64, Math.round(st.clientWidth * dpr));
+    h = Math.max(64, Math.round(st.clientHeight * dpr));
+    if (w * h > MAX_PIXELS) {
+      const k = Math.sqrt(MAX_PIXELS / (w * h));
+      w = Math.max(64, Math.round(w * k)); h = Math.max(64, Math.round(h * k));
+    }
   }
   if (!force && w === RT.w && h === RT.h) return;
   cv.width = w; cv.height = h;
@@ -3298,10 +3432,27 @@ function loop(now) {
 }
 
 function tick(now) {
+  // A batch dump drives the pipeline itself; letting rAF in as well would
+  // interleave extra frames into the feedback chain and desynchronize the run.
+  if (PARITY.busy) { tPrev = now; return; }
+
   PERF.iv = frameNo === 0 ? 16.7 : (now - tPrev);
   PERF.ivEma += (PERF.iv - PERF.ivEma) * 0.12;
-  const dt = Math.min(0.05, Math.max(0.0004, PERF.iv / 1000));
   tPrev = now;
+
+  // Step replay: one timeline row per rAF frame, and nothing downstream of
+  // here reads the wall clock. Same code path the dump uses, so what you watch
+  // on screen is what lands in the PNGs.
+  if (TL.step && TL.play && TL.data) {
+    const tS = performance.now();
+    stepOnce();
+    PERF.raw = performance.now() - tS;
+    PERF.ms += (PERF.raw - PERF.ms) * 0.10;
+    updateReadouts(now);
+    return;
+  }
+
+  const dt = Math.min(0.05, Math.max(0.0004, PERF.iv / 1000));
   tSec += dt;
   frameNo++;
 
@@ -3324,6 +3475,438 @@ function tick(now) {
   tlCapture(dt);
   updateReadouts(now);
 }
+
+/* ==========================================================================
+   PARITY — deterministic step replay and batch frame dump.
+
+   Phase 1's gate is "render the same scripted timeline in both hosts and diff
+   the frames". That only means something if every host-side input to a frame
+   is pinned: dt, elapsed time, drawing-buffer size, render scale, governor
+   tier, feedback history and every RNG. tlStepBegin() pins all of them;
+   stepOnce() advances exactly one frame without consulting the wall clock.
+   src/Ripple/Render/StepRunner.cs is the mirror of this code — change one and
+   you must change the other.
+   ========================================================================== */
+
+function clearFeedback() {
+  gl.clearColor(0, 0, 0, 1);
+  for (let i = 0; i < 2; i++) {
+    target(RT.pingFbo[i], RT.pw, RT.ph); gl.clear(gl.COLOR_BUFFER_BIT);
+    target(RT.bloomFbo[i], RT.bw, RT.bh); gl.clear(gl.COLOR_BUFFER_BIT);
+  }
+  target(RT.finalFbo, RT.w, RT.h); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  RT.cur = 0;
+  gl.bindTexture(gl.TEXTURE_2D, RT.final);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.bindTexture(gl.TEXTURE_2D, null);
+}
+
+/* Reset every piece of host-side state a rendered frame depends on. Miss one
+   and the diff quietly starts measuring whatever the harness happened to be
+   doing before the run began. */
+function tlStepBegin() {
+  if (!TL.data) throw new Error('no timeline loaded');
+  TL.step = true; TL.play = true; TL.stepFrame = 0; TL.cur = -1; TL.ended = false;
+  tSec = 0; frameNo = 0;
+  rngMotif = mulberry32(RNG_MOTIF_SEED);
+  MOT.rose = 0; MOT.bolt = 0; MOT.roseCool = 0; MOT.boltCool = 0;
+  MOT.roseSeed = 1.3; MOT.boltSeed = 7.1;
+  SAFE.mean = 0; SAFE.prev = 0; SAFE.scale = 1; SAFE.lastD = 0;
+  SAFE.flashRate = 0; SAFE.zc.length = 0;
+  palRotSmooth = 0; palRotPrev = 0; hueRate = 0; spiralSpin = 0;
+  // D.palRot too. resetDraw() deliberately does NOT clear it — it accumulates
+  // across frames and advancePalette() consumes it modulo 1 — which means a
+  // parity run inherited however much rotation the page had piled up since
+  // load, and in a DUMP ALL each preset inherited the previous one's. The
+  // native host has always zeroed it in ResetForDeterministicRun(); this side
+  // did not, so the palette started at a different angle and every colour in
+  // the run was off. Found by tools/compare-trace.mjs: palRot was one of three
+  // traced parameters that differed, and the only one differing at frame 0.
+  D.palRot = 0;
+  RH.phase = 0; RH.bar = 0; RH.beats = 0; RH.sectionPhase = 0;
+  RH.onsetEnv = 0; RH.lastOnset = -9;
+  SY.onsetEnv = 0; SY.cfluxEnv = 0; SY.novEnv = 0; SY.lastBeats = 0; SY.lastBar = -1;
+  GOV.auto = false; GOV.panic = false; GOV.tier = 0; GOV.down = 0; GOV.up = 0; GOV.dwell = 0;
+  RENDER_SCALE = PARITY.scale;
+  PARITY.lock = true;
+  resize(true);
+  clearFeedback();
+}
+
+function parityStepEnd() {
+  TL.step = false; TL.play = false; TL.stepFrame = 0; TL.cur = -1; TL.ended = false;
+  PARITY.lock = false; GOV.auto = true;
+  resize(true);
+  tPrev = performance.now();
+}
+
+/* Exactly one deterministic frame. dt is 1/rate, time is index/rate, and the
+   luminance loop runs off the step index rather than a counter that started
+   whenever the page loaded. */
+function stepOnce() {
+  const rate = (TL.data && TL.data.rate) || 60;
+  const dt = 1 / rate;
+  tSec = TL.stepFrame / rate;     // TL.stepFrame is the row about to render
+  frameNo++;
+
+  // Mode A: nothing carries between frames. Clearing here rather than in
+  // tlStepBegin() also re-pins RT.cur to 0, so the ping-pong parity cannot
+  // drift between the hosts either. Mirrored in StepRunner.StepOnce().
+  if (PARITY.noFeedback) clearFeedback();
+
+  buildFeatureFrame(dt);          // tlTick() copies row TL.stepFrame verbatim
+  uploadFeatureFrame();
+
+  resetDraw(ST.live);
+  applyMapping(ST.live.mapping);
+  govApply();                     // tier 0 is the identity, but keep the call
+
+  // Mode A drops the film grain along with the feedback carry — see the note
+  // in GlHost.DrawFrame(). The grain is a fract-chain hash of vUv, so it
+  // decorrelates between ANGLE and a desktop GL driver no matter what, and
+  // with the feedback cleared it would be most of the frame's variance.
+  if (PARITY.noFeedback) D.grain = 0;
+  if (PARITY.noParticles) D.pCount = 0;
+  advanceMotifs(dt);
+  advancePalette(dt);
+
+  renderFrame();
+  if (TL.cur % 3 === 0) measureLuminance(dt * 3);
+  return TL.cur;
+}
+
+/* --- frame capture: readPixels -> PNG ----------------------------------- */
+
+const CAP = { w: 0, h: 0, buf: null, cv: null, ctx: null, img: null };
+function captureFrame() {
+  const w = RT.w, h = RT.h;
+  if (CAP.w !== w || CAP.h !== h) {
+    CAP.w = w; CAP.h = h;
+    CAP.buf = new Uint8Array(w * h * 4);
+    CAP.cv = document.createElement('canvas');
+    CAP.cv.width = w; CAP.cv.height = h;
+    CAP.ctx = CAP.cv.getContext('2d');
+    CAP.img = CAP.ctx.createImageData(w, h);
+  }
+  // Read the composite target, not the canvas: no DPR scaling, no compositor
+  // in the path, and it works whether or not the drawing buffer was preserved.
+  gl.bindFramebuffer(gl.FRAMEBUFFER, RT.finalFbo);
+  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, CAP.buf);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+  // GL reads bottom-up, PNG is top-down. Force alpha opaque so the 2D canvas
+  // cannot un-premultiply and shift the colours on the way out.
+  const d = CAP.img.data, row = w * 4;
+  for (let y = 0; y < h; y++) d.set(CAP.buf.subarray((h - 1 - y) * row, (h - y) * row), y * row);
+  for (let i = 3; i < d.length; i += 4) d[i] = 255;
+  CAP.ctx.putImageData(CAP.img, 0, 0);
+  return new Promise(res => CAP.cv.toBlob(res, 'image/png'));
+}
+
+/* --- sinks: a picked directory, or a store-mode zip ---------------------- */
+
+const CRC_T = (function () {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(u8) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < u8.length; i++) c = CRC_T[(c ^ u8[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+/* PNG is already deflated; storing is faster and keeps this to ~40 lines with
+   no dependency. Fixed timestamps so two zips of the same run compare equal. */
+function zipStore(entries) {
+  const enc = new TextEncoder();
+  const parts = [], central = [];
+  let off = 0;
+  for (const e of entries) {
+    const name = enc.encode(e.name);
+    const crc = crc32(e.data), sz = e.data.length;
+    const lh = new DataView(new ArrayBuffer(30));
+    lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true);
+    lh.setUint16(6, 0x0800, true); lh.setUint16(8, 0, true);
+    lh.setUint16(10, 0, true); lh.setUint16(12, 0x2821, true);
+    lh.setUint32(14, crc, true); lh.setUint32(18, sz, true); lh.setUint32(22, sz, true);
+    lh.setUint16(26, name.length, true); lh.setUint16(28, 0, true);
+    parts.push(new Uint8Array(lh.buffer), name, e.data);
+    const ch = new DataView(new ArrayBuffer(46));
+    ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true);
+    ch.setUint16(8, 0x0800, true); ch.setUint16(10, 0, true);
+    ch.setUint16(12, 0, true); ch.setUint16(14, 0x2821, true);
+    ch.setUint32(16, crc, true); ch.setUint32(20, sz, true); ch.setUint32(24, sz, true);
+    ch.setUint16(28, name.length, true); ch.setUint32(42, off, true);
+    central.push(new Uint8Array(ch.buffer), name);
+    off += 30 + name.length + sz;
+  }
+  let cdSize = 0;
+  for (const c of central) cdSize += c.length;
+  const eo = new DataView(new ArrayBuffer(22));
+  eo.setUint32(0, 0x06054b50, true);
+  eo.setUint16(8, entries.length, true); eo.setUint16(10, entries.length, true);
+  eo.setUint32(12, cdSize, true); eo.setUint32(16, off, true);
+  return new Blob(parts.concat(central, [new Uint8Array(eo.buffer)]), { type: 'application/zip' });
+}
+
+async function makeSink(rootName) {
+  if (window.showDirectoryPicker) {
+    const dh = await window.showDirectoryPicker({ mode: 'readwrite', id: 'ripple-parity' });
+    const dirs = new Map();
+    return {
+      kind: 'directory',
+      async put(path, blob) {
+        const parts = path.split('/');
+        let cur = dh;
+        for (let i = 0; i < parts.length - 1; i++) {
+          const key = parts.slice(0, i + 1).join('/');
+          let d = dirs.get(key);
+          if (!d) { d = await cur.getDirectoryHandle(parts[i], { create: true }); dirs.set(key, d); }
+          cur = d;
+        }
+        const fh = await cur.getFileHandle(parts[parts.length - 1], { create: true });
+        const w = await fh.createWritable();
+        await w.write(blob); await w.close();
+      },
+      async finish() {}
+    };
+  }
+  const entries = [];
+  return {
+    kind: 'zip',
+    async put(path, blob) { entries.push({ name: path, data: new Uint8Array(await blob.arrayBuffer()) }); },
+    async finish() {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(zipStore(entries));
+      a.download = rootName + '.zip';
+      document.body.appendChild(a); a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+    }
+  };
+}
+
+function glRendererName() {
+  const e = gl.getExtension('WEBGL_debug_renderer_info');
+  try { return String(gl.getParameter(e ? e.UNMASKED_RENDERER_WEBGL : gl.RENDERER)); }
+  catch (err) { return 'unknown'; }
+}
+
+/* Render the whole timeline in step mode and write every stride-th frame.
+   Every frame is rendered — the feedback buffer is history, so skipping any
+   would change all the ones after it. Only the writing is strided. */
+async function parityDump(opts) {
+  if (PARITY.busy) { toast('dump already running'); return; }
+  if (!TL.data) { toast('load a timeline first'); return; }
+
+  const stride = Math.max(1, Math.round(opts.stride || 1));
+  PARITY.w = Math.max(64, Math.round(opts.w || PARITY.w));
+  PARITY.h = Math.max(64, Math.round(opts.h || PARITY.h));
+  PARITY.stride = stride;
+  if (opts.noFeedback !== undefined) PARITY.noFeedback = !!opts.noFeedback;
+  const n = TL.data.frames.length;
+  const rate = TL.data.rate || 60;
+  const list = opts.all ? LIBRARY.map((p, i) => i) : [ST.presetIdx];
+
+  let sink;
+  try { sink = await makeSink('ripple-parity-harness'); }
+  catch (e) { toast('dump cancelled'); return; }
+
+  const savedIdx = ST.presetIdx;
+  PARITY.busy = true;
+  let written = 0;
+  try {
+    for (let li = 0; li < list.length; li++) {
+      ST.presetIdx = list[li];
+      presetSel.value = String(ST.presetIdx);
+      applyPreset();
+      const id = ST.live.id || ('preset' + ST.presetIdx);
+      tlStepBegin();
+      for (let i = 0; i < n; i++) {
+        stepOnce();
+        if (i % stride === 0) {
+          // frame_NNNNN.png, matching StepRunner.RunDump() exactly:
+          // compare-ssim.mjs pairs files by name, so a naming difference
+          // reads as a missing frame rather than as a mismatch.
+          await sink.put(id + '/frame_' + String(i).padStart(5, '0') + '.png', await captureFrame());
+          written++;
+        }
+        if ((i & 31) === 0) {
+          if (tlKv.dump) tlKv.dump.textContent = id + '  ' + i + '/' + n + '  ' + written + ' png';
+          await new Promise(r => setTimeout(r, 0));   // let the UI breathe
+        }
+      }
+      await sink.put(id + '/manifest.json', new Blob([JSON.stringify({
+        schemaVersion: 1, kind: 'ripple-parity-dump', host: 'harness',
+        preset: id, presetName: ST.live.name || id, fractal: ST.live.fractal,
+        width: PARITY.w, height: PARITY.h, renderScale: PARITY.scale,
+        rate: rate, frames: n, stride: stride, mode: 'step',
+        feedback: !PARITY.noFeedback,                       // false = gate mode A
+        gateMode: PARITY.noFeedback ? 'A' : 'B',
+        rngParticleSeed: RNG_PARTICLE_SEED, rngMotifSeed: RNG_MOTIF_SEED,
+        colorBuffer: GLCAP.float ? 'RGBA16F' : 'RGBA8',
+        gl: String(gl.getParameter(gl.VERSION)), renderer: glRendererName()
+      }, null, 2)], { type: 'application/json' }));
+    }
+    await sink.finish();
+    toast('dumped ' + written + ' frames to ' + sink.kind);
+  } catch (e) {
+    toast('dump failed: ' + (e.message || e));
+    throw e;
+  } finally {
+    PARITY.busy = false;
+    parityStepEnd();
+    ST.presetIdx = savedIdx;
+    presetSel.value = String(savedIdx);
+    applyPreset();
+    if (tlKv.dump) tlKv.dump.textContent = written + ' png written';
+  }
+}
+
+/* --- automation surface ------------------------------------------------- */
+/* tools/parity-harness.mjs drives this over the Chrome DevTools Protocol so the
+   gate can run without a human clicking DUMP and picking a directory.
+
+   Every entry is a thin wrapper over the same functions the panel buttons call.
+   That is deliberate: if the driver reimplemented the dump, the thing we
+   automate would stop being the thing a person tests by hand, and the two
+   would drift without anything noticing. */
+window.__ripple = {
+  ready: true,
+
+  glInfo: () => ({
+    version: String(gl.getParameter(gl.VERSION)),
+    renderer: glRendererName(),
+    float: GLCAP.float,
+    floatLinear: GLCAP.floatLinear,
+    colorBuffer: GLCAP.float ? 'RGBA16F' : 'RGBA8'
+  }),
+
+  presets: () => LIBRARY.map((p, i) => ({
+    index: i, id: p.id || ('preset' + i), name: p.name || '', fractal: p.fractal || ''
+  })),
+
+  /* Record a timeline off the synthetic driver with dt pinned to 1/rate and no
+     wall clock in the path.
+
+     Note the synthetic driver sprinkles onsets and chord changes with
+     Math.random(), so a recording is NOT reproducible run to run. That is why
+     the timeline is committed to the repo as a fixture instead of regenerated
+     per run: replay is what has to be deterministic, and it is. */
+  record(seconds, rate) {
+    useSynth();
+    tSec = 0; frameNo = 0;
+    RH.phase = 0; RH.bar = 0; RH.beats = 0; RH.sectionPhase = 0;
+    RH.onsetEnv = 0; RH.lastOnset = -9;
+    SY.onsetEnv = 0; SY.cfluxEnv = 0; SY.novEnv = 0; SY.lastBeats = 0; SY.lastBar = -1;
+    tlStart(seconds, rate);
+    const n = Math.round(seconds * rate), dt = 1 / rate;
+    for (let i = 0; i < n; i++) {
+      tSec = i * dt; frameNo++;
+      buildFeatureFrame(dt);
+      tlCapture(dt);
+    }
+    tlStop();
+    return tlExport();
+  },
+
+  load(json) { tlLoad(json); return TL.data.frames.length; },
+
+  /* PARITY.busy is set before tlStepBegin() so tick() bows out: an rAF frame
+     landing mid-run would push an extra frame through the feedback chain and
+     desynchronize everything after it. */
+  parityBegin(o) {
+    o = o || {};
+    if (!TL.data) throw new Error('no timeline loaded');
+    if (o.w) PARITY.w = Math.max(64, Math.round(o.w));
+    if (o.h) PARITY.h = Math.max(64, Math.round(o.h));
+    if (o.stride) PARITY.stride = Math.max(1, Math.round(o.stride));
+    PARITY.noFeedback = !!o.noFeedback;
+    PARITY.noParticles = !!o.noParticles;
+    if (typeof o.presetIdx === 'number') {
+      ST.presetIdx = o.presetIdx;
+      if (presetSel) presetSel.value = String(o.presetIdx);
+      applyPreset();
+    }
+    PARITY.busy = true;
+    tlStepBegin();
+    return { preset: ST.live.id, name: ST.live.name, fractal: ST.live.fractal,
+             w: RT.w, h: RT.h, pw: RT.pw, ph: RT.ph, frames: TL.data.frames.length };
+  },
+
+  step(n) { let i = -1; for (let k = 0; k < (n || 1); k++) i = stepOnce(); return i; },
+
+  /* The composite target as base64 PNG. Chunked so a 960x540 frame does not
+     blow the argument limit on String.fromCharCode. */
+  async capture() {
+    const buf = new Uint8Array(await (await captureFrame()).arrayBuffer());
+    let out = '';
+    const CH = 0x8000;
+    for (let i = 0; i < buf.length; i += CH)
+      out += String.fromCharCode.apply(null, buf.subarray(i, i + CH));
+    return btoa(out);
+  },
+
+  manifest(o) {
+    o = o || {};
+    return {
+      schemaVersion: 1, kind: 'ripple-parity-dump', host: 'harness',
+      preset: ST.live.id, presetName: ST.live.name || ST.live.id, fractal: ST.live.fractal,
+      width: PARITY.w, height: PARITY.h, renderScale: PARITY.scale,
+      rate: (TL.data && TL.data.rate) || 60,
+      frames: (TL.data && TL.data.frames.length) || 0,
+      stride: PARITY.stride, mode: 'step',
+      feedback: !PARITY.noFeedback,
+      gateMode: PARITY.noFeedback ? 'A' : 'B',
+      rngParticleSeed: RNG_PARTICLE_SEED, rngMotifSeed: RNG_MOTIF_SEED,
+      colorBuffer: GLCAP.float ? 'RGBA16F' : 'RGBA8',
+      gl: String(gl.getParameter(gl.VERSION)), renderer: glRendererName(),
+      timeline: o.timeline || ''
+    };
+  },
+
+  /* The scalars a frame's appearance depends on, in the SAME ORDER as
+     StepRunner.TraceKeys. tools/compare-trace.mjs diffs the two and names the
+     parameter that diverged, which is the difference between "the images
+     differ by 0.03 SSIM" and "decay is wrong". */
+  traceKeys: () => [
+    'decay', 'zoom', 'rotate', 'warpAmount', 'warpScale', 'bassGain', 'symmetry',
+    'paint', 'centerPull', 'onsetDecay',
+    'iterations', 'escapeRadius', 'orbitRadius', 'beatMorph',
+    'warp', 'scale', 'flow', 'cells', 'rim', 'iridescence', 'mask', 'octaves', 'rimWidth',
+    'trapGain', 'zoomPeriod', 'zoomDepth', 'fold', 'line',
+    'boltGain', 'boltThreshold', 'roseGain', 'roseThreshold',
+    'motifOpacity', 'motifGain',
+    'pCount', 'pCurl', 'pLife', 'pSize', 'pEmit', 'pRise',
+    'bloomThreshold', 'bloomGain', 'bloomTaps', 'bloomKnee',
+    'grain', 'vignette', 'exposure', 'saturate',
+    'chromaBlend', 'spiral', 'palRot',
+    'maxLumDelta', 'maxBright',
+    'rose', 'bolt', 'safeMean', 'safeScale', 'hueRate'
+  ],
+
+  trace: () => [
+    D.decay, D.zoom, D.rotate, D.warpAmount, D.warpScale, D.bassGain, D.symmetry,
+    D.paint, D.centerPull, D.onsetDecay,
+    D.iterations, D.escapeRadius, D.orbitRadius, D.beatMorph,
+    D.warp, D.scale, D.flow, D.cells, D.rim, D.iridescence, D.mask, D.octaves, D.rimWidth,
+    D.trapGain, D.zoomPeriod, D.zoomDepth, D.fold, D.line,
+    D.boltGain, D.boltThreshold, D.roseGain, D.roseThreshold,
+    D.motifOpacity, D.motifGain,
+    D.pCount, D.pCurl, D.pLife, D.pSize, D.pEmit, D.pRise,
+    D.bloomThreshold, D.bloomGain, D.bloomTaps, D.bloomKnee,
+    D.grain, D.vignette, D.exposure, D.saturate,
+    D.chromaBlend, D.spiral, D.palRot,
+    D.maxLumDelta, D.maxBright,
+    MOT.rose, MOT.bolt, SAFE.mean, SAFE.scale, hueRate
+  ],
+
+  parityEnd() { PARITY.busy = false; parityStepEnd(); }
+};
 
 /* --- keyboard ----------------------------------------------------------- */
 window.addEventListener('keydown', e => {
