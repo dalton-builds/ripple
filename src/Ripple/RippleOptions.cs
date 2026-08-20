@@ -27,6 +27,14 @@ public sealed class RippleOptions
     public string? RecordFeatures;
     public double RecordSeconds = 60;
 
+    /// <summary>
+    /// What this capture is OF — "tight-backbeat, Sugar Magnolia 1972". Stored in the
+    /// timeline so a fixture is self-describing: the filename says which capture it is, the
+    /// label says what it was supposed to demonstrate, and six months later only one of
+    /// those is still obvious.
+    /// </summary>
+    public string RecordLabel = "";
+
     /// <summary>Timeline to replay instead of the synthetic driver.</summary>
     public string? Timeline;
 
@@ -112,6 +120,7 @@ public sealed class RippleOptions
                 case "--audio": o.Audio = true; break;
                 case "--record-features": o.RecordFeatures = Next(a); o.Audio = true; break;
                 case "--record-seconds": o.RecordSeconds = double.Parse(Next(a), System.Globalization.CultureInfo.InvariantCulture); break;
+                case "--record-label": o.RecordLabel = Next(a); break;
                 case "--no-feedback": o.NoFeedback = true; break;
                 case "--no-grain": o.NoGrain = true; break;
                 case "--parity-mode": o.ParityMode = Next(a); break;
@@ -164,6 +173,7 @@ public sealed class RippleOptions
                  [--no-hot-reload]
 
           Ripple --record-features <out.json> [--record-seconds 60]
+                 [--record-label "what this capture is of"]
 
           Ripple --dump --timeline <file.json> --out <dir> [--all]
                  [--parity-mode a|b] [--preset <id|index>] [--stride N]
@@ -191,5 +201,11 @@ public sealed class RippleOptions
         --record-features writes real-audio Feature Frames in the same timeline
         format the harness reads, so you can capture a minute of real music and
         tune presets against it in the browser instead of against sliders.
+
+        The path is relative to the CURRENT DIRECTORY and any missing folders
+        are created. Recording runs on the analysis thread, one row per DSP hop
+        (93.75 rows/s at 48 kHz), so the capture rate does not depend on how
+        fast this machine renders. While it captures, a status line every two
+        seconds reports level, tempo, confidence and the eight bands.
         """;
 }

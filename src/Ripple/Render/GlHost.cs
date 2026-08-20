@@ -142,8 +142,11 @@ public sealed partial class GlHost : IDisposable
                 _recorder = new FeatureRecorder(fmt.FrameRate, _opt.RecordSeconds);
                 _audio.AttachRecorder(_recorder);
                 Console.WriteLine($"[record] {_opt.RecordSeconds:0.#}s at {fmt.FrameRate:0.#} fps "
-                    + $"-> {_opt.RecordFeatures}");
-                Console.WriteLine("[record] play something now; the window shows what is being captured");
+                    + $"-> {Path.GetFullPath(_opt.RecordFeatures)}");
+                if (!string.IsNullOrEmpty(_opt.RecordLabel))
+                    Console.WriteLine($"[record] label: {_opt.RecordLabel}");
+                Console.WriteLine("[record] recording starts when audio arrives — start playback now.");
+                Console.WriteLine($"[record] {"level",6}  {"bands",8}   tempo / key / percussivity / width");
             }
         }
 
@@ -352,6 +355,7 @@ public sealed partial class GlHost : IDisposable
         if (_recorder is null || _recordingDone || _recordStart == 0) return;
 
         // The recorder is filled by the analysis thread; the render loop only watches.
+        ReportCaptureProgress();
         if (_recorder.Full) { FinishRecording("complete"); return; }
 
         double elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(_recordStart).TotalSeconds;
@@ -380,7 +384,7 @@ public sealed partial class GlHost : IDisposable
             _recorder.Write(_opt.RecordFeatures!,
                 $"Captured from {_audio.DeviceName} via WASAPI loopback, one row per "
                 + $"analysis hop. Dropped {_audio.DroppedSamples} samples to ring overrun.",
-                fmt, _audio.DeviceName);
+                fmt, _audio.DeviceName, _opt.RecordLabel);
             Console.WriteLine($"[record] wrote {_recorder.Count} frames "
                 + $"({_recorder.Seconds:0.#}s) to {_opt.RecordFeatures} — {why}");
             if (_audio.DroppedSamples > 0)
@@ -393,6 +397,31 @@ public sealed partial class GlHost : IDisposable
 
     private bool _recordingDone;
     private long _recordStart;
+    private long _lastProgressTicks;
+
+    /// <summary>
+    /// A status line every two seconds while capturing. §15 lists a diagnostic HUD in
+    /// Phase 2 and this is it, in the form that matters for a capture session: you can see
+    /// whether the level is sane, whether all eight bands have content, and whether the
+    /// tempo locked — while there is still time to stop and fix it.
+    /// </summary>
+    private void ReportCaptureProgress()
+    {
+        if (_audio is null || _recorder is null) return;
+
+        double since = _lastProgressTicks == 0
+            ? double.PositiveInfinity
+            : System.Diagnostics.Stopwatch.GetElapsedTime(_lastProgressTicks).TotalSeconds;
+        if (since < 2.0) return;
+        _lastProgressTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        string warn = "";
+        if (!_audio.Healthy) warn = "   <- NO AUDIO";
+        else if (_audio.DroppedSamples > 0) warn = $"   <- {_audio.DroppedSamples} samples dropped";
+
+        Console.WriteLine($"[record] {_recorder.Seconds,5:0.0}/{_opt.RecordSeconds:0.#}s  "
+            + $"{_audio.Readout()}{warn}");
+    }
 
     /// <summary>
     /// §11 budgets the analysis chain at "under 1% of one core". Print what it actually

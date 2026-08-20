@@ -60,7 +60,8 @@ public sealed class FeatureRecorder
     /// than the convenience: "R" keeps every value exactly as recorded, and invariant
     /// culture means a machine with a comma decimal separator produces the same file.
     /// </summary>
-    public void Write(string path, string note, AudioFormat format, string? source = null)
+    public void Write(string path, string note, AudioFormat format, string? source = null,
+                      string? label = null)
     {
         var sb = new StringBuilder(_rows.Count * 56 * 8);
         sb.Append("{\n");
@@ -73,6 +74,8 @@ public sealed class FeatureRecorder
         sb.Append(CultureInfo.InvariantCulture, $"  \"frameBytes\": {FeatureFrame.ByteSize},\n");
         sb.Append(CultureInfo.InvariantCulture, $"  \"sampleRate\": {format.SampleRate},\n");
         sb.Append(CultureInfo.InvariantCulture, $"  \"channels\": {format.Channels},\n");
+        if (!string.IsNullOrEmpty(label))
+            sb.Append(CultureInfo.InvariantCulture, $"  \"label\": {Quote(label)},\n");
         if (!string.IsNullOrEmpty(source))
             sb.Append(CultureInfo.InvariantCulture, $"  \"source\": {Quote(source)},\n");
         sb.Append(CultureInfo.InvariantCulture, $"  \"note\": {Quote(note)},\n");

@@ -71,6 +71,45 @@ public sealed class AudioEngine : IDisposable
 
     public FeatureRecorder? Recorder => _recorder;
 
+    /// <summary>
+    /// A readable summary of what the DSP currently thinks, for the diagnostic readout
+    /// (§15's Phase 2 "diagnostic HUD", in console form).
+    ///
+    /// This exists because a capture with no feedback is a black box: you find out the
+    /// tempo never locked, or the level was 30 dB too low, after the take rather than
+    /// during it. Cheap enough to call a few times a second.
+    /// </summary>
+    public string Readout()
+    {
+        Analyzer? a;
+        lock (_analyzerLock) a = _analyzer;
+        if (a is null) return "no analyzer yet";
+
+        var f = a.LastFrame.AsSpan();
+        double dbfs = 20 * Math.Log10(a.RawRms + 1e-9);
+
+        // Eight bands as a bar each, so a spectrally lopsided capture is obvious at a
+        // glance rather than after a distribution analysis.
+        const string ramp = " .:-=+*#%@";
+        var bars = new char[8];
+        for (int b = 0; b < 8; b++)
+            bars[b] = ramp[Math.Clamp((int)(f[FF.Sub + b] * (ramp.Length - 1)), 0, ramp.Length - 1)];
+
+        string key = KeyName(a.KeyPitchClass, a.KeyIsMinor);
+        string tempo = a.BpmConfidence < Analyzer.ConfidenceFloor
+            ? $"free-time (conf {a.BpmConfidence:0.00})"
+            : $"{a.Bpm,5:0.0} BPM conf {a.BpmConfidence:0.00}";
+
+        return $"{dbfs,6:0.0} dBFS  [{new string(bars)}]  {tempo}  key {key,-3} "
+             + $"perc {f[FF.Percussivity]:0.00}  width {f[FF.StereoWidth]:0.00}";
+    }
+
+    private static string KeyName(int pc, bool minor)
+    {
+        string[] names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+        return names[Math.Clamp(pc, 0, 11)] + (minor ? "m" : "");
+    }
+
     /// <summary>Per-stage DSP cost from the live analyzer, for the §11 breakdown.</summary>
     public IEnumerable<(string Name, double MsPerHop)> StageCostMs()
     {
