@@ -110,3 +110,46 @@ Everything visual. Palettes, feedback constants, motif gains, fractal parameters
 motion characters in `presets/eras/*.json` are **starting points to be tuned in the harness on
 real audio**. The numbers in there are educated guesses, not measurements. Expect to change most
 of them, and change them in the JSON rather than in code.
+
+---
+
+## Rejected approaches
+
+Things that were tried, measured, and abandoned. They are recorded here because each one
+looks reasonable from the outside, and the reasoning that killed it is not recoverable
+from the code that does not contain it.
+
+### Compensating mode A's dimness by removing the (1-decay) paint normalization
+
+**Symptom that motivated it.** With the feedback carry excluded (parity gate mode A), a
+rendered frame is very dark: mean luma 3.7/255 with 97.8% of pixels below 4/255, against
+mean 34/255 for the same preset with feedback on. SSIM computed on that is measuring 8-bit
+quantization noise, not the render, and the gate scored 0.86 where it should have scored
+~1.0.
+
+**The idea.** `DrawState.Reset()` sets
+`Paint = paintGain * (1 - min(decay, 0.9995)) * 30`. The `(1 - decay)` factor is there so
+changing `decay` does not change exposure: the feedback buffer's equilibrium is
+`paint / (1 - decay)`, so folding `(1 - decay)` into the paint cancels it. Dividing it back
+out in mode A should therefore paint a single frame at exactly the amplitude the loop
+would have accumulated to — a factor derived from the code rather than tuned.
+
+**Result: worse. 0.991 -> 0.638 mean SSIM.** Do not retry it.
+
+**Why it cannot work.** The per-frame paint is deliberately a *sparse, high-contrast
+dither spray* — the harness comment at the paint pass says so outright: "The paint per
+frame is deliberately SPARSE and high contrast: a dim body plus bright specks, because
+the buffer reaches equilibrium at paint/(1-decay)". The image is the **integral** of that
+spray. Amplifying one frame of it by ~67x does not produce a dim version of the final
+image; it produces isolated blown-out specks over black. So the compensated frame is
+*more* dominated by per-pixel stochastic placement than the uncompensated one, and that
+placement is precisely the term that cannot match across GL implementations.
+
+**What to do instead.** Accept that a single frame of this renderer is not a picture, and
+exclude the terms that are stochastic per pixel rather than trying to scale them into
+view. That is what mode A does: see `tests/parity-config.json` for the exclusion list and
+the measurement behind each entry.
+
+**The general lesson.** Dim mode-A frames are not a bug to be fixed by gain. They are
+what a feedback renderer's integrand looks like. Anyone who finds those frames later and
+reaches for an exposure knob should read this section first.

@@ -40,6 +40,19 @@ internal static class Program
         // making the caller care.
         ResolveRoots(opt);
 
+        if (!string.IsNullOrEmpty(opt.ParityMode))
+        {
+            try
+            {
+                Console.WriteLine($"[parity] {ParityProfile.Apply(opt, opt.ParityMode)}");
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"ripple: {ex.Message}");
+                return 2;
+            }
+        }
+
         try
         {
             using var host = new GlHost(opt);

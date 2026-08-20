@@ -61,6 +61,7 @@
 import { readdirSync, readFileSync, writeFileSync, statSync, existsSync, mkdirSync } from 'node:fs';
 import { inflateSync, deflateSync } from 'node:zlib';
 import { join, dirname, basename, resolve } from 'node:path';
+import { loadParityConfig, parityMode } from './parity-config.mjs';
 
 /* ========================================================================== */
 /*  PNG                                                                       */
@@ -384,6 +385,8 @@ function parseArgs(argv) {
   const o = {
     dirs: [], threshold: 0.995, mode: 'a', smokeFrame: 60, smoke: 0.95,
     out: null, amplify: 8, diff: true, quiet: false, help: false,
+    parityConfig: 'tests/parity-config.json',
+    thresholdSpecified: false, smokeSpecified: false, smokeFrameSpecified: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -392,10 +395,11 @@ function parseArgs(argv) {
       return argv[++i];
     };
     switch (a) {
-      case '--threshold': o.threshold = Number(next()); break;
+      case '--threshold': o.threshold = Number(next()); o.thresholdSpecified = true; break;
+      case '--parity-config': o.parityConfig = next(); break;
       case '--mode': o.mode = next().toLowerCase(); break;
-      case '--smoke-frame': o.smokeFrame = Number(next()); break;
-      case '--smoke': o.smoke = Number(next()); break;
+      case '--smoke-frame': o.smokeFrame = Number(next()); o.smokeFrameSpecified = true; break;
+      case '--smoke': o.smoke = Number(next()); o.smokeSpecified = true; break;
       case '--out': o.out = next(); break;
       case '--amplify': o.amplify = Number(next()); break;
       case '--no-diff': o.diff = false; break;
@@ -408,8 +412,35 @@ function parseArgs(argv) {
   }
   if (o.help) return o;
   if (o.dirs.length !== 2) throw new Error('need exactly two directories: <dirA> <dirB>');
-  if (o.mode !== 'a' && o.mode !== 'b') throw new Error(`--mode must be a or b, got ${o.mode}`);
   if (!(o.threshold >= 0 && o.threshold <= 1)) throw new Error('--threshold must be 0..1');
+
+  // Thresholds and the expected exclusion set come from the config, so this tool and
+  // the two hosts cannot disagree about what a mode means. A flag still overrides.
+  const cfgPath = resolve(o.parityConfig);
+  if (existsSync(cfgPath)) {
+    const cfg = loadParityConfig(cfgPath);
+    const m = parityMode(cfg, o.mode, cfgPath);
+    o.expect = m.exclude;
+    o.modeName = m.name || o.mode;
+    o.isGate = m.isGate !== false;
+    const g = m.gate || {};
+    if (g.type === 'per-frame' && !o.thresholdSpecified && typeof g.threshold === 'number')
+      o.threshold = g.threshold;
+    if (g.type === 'smoke') {
+      if (!o.smokeSpecified && typeof g.threshold === 'number') o.smoke = g.threshold;
+      if (!o.smokeFrameSpecified && typeof g.frame === 'number') o.smokeFrame = g.frame;
+    }
+    o.gateType = g.type || (o.mode === 'a' ? 'per-frame' : 'smoke');
+  } else {
+    if (o.mode !== 'a' && o.mode !== 'b')
+      throw new Error(`--mode must be a or b without a config, got ${o.mode}`);
+    o.gateType = o.mode === 'a' ? 'per-frame' : 'smoke';
+    o.expect = o.mode === 'a'
+      ? { feedback: true, grain: true, particles: true }
+      : { feedback: false, grain: false, particles: false };
+    o.modeName = o.mode;
+    o.isGate = o.mode === 'a';
+  }
   return o;
 }
 
@@ -479,11 +510,18 @@ function main() {
       if (mA && mB && mA[k] !== undefined && mB[k] !== undefined && mA[k] !== mB[k])
         warnings.push(`${g.id}: ${label} differs — A ${mA[k]} vs B ${mB[k]}`);
     }
-    const expectFeedback = opt.mode === 'b';
+    // A dump that ran with the wrong exclusions is the failure that looks most like
+    // a shader bug, so say so loudly rather than grading it.
     for (const [m, side] of [[mA, 'A'], [mB, 'B']]) {
-      if (m && m.feedback !== undefined && m.feedback !== expectFeedback)
-        warnings.push(`${g.id}: dump ${side} has feedback=${m.feedback}, `
-          + `but --mode ${opt.mode} expects feedback=${expectFeedback}`);
+      if (!m) continue;
+      for (const term of ['feedback', 'grain', 'particles']) {
+        if (m[term] === undefined) continue;
+        const rendered = m[term];               // manifest records what WAS rendered
+        const shouldRender = !opt.expect[term];
+        if (rendered !== shouldRender)
+          warnings.push(`${g.id}: dump ${side} rendered ${term}=${rendered}, `
+            + `but mode ${opt.mode} expects ${term}=${shouldRender}`);
+      }
     }
 
     const listA = framesIn(dirA);
@@ -535,7 +573,7 @@ function main() {
       (best === null || Math.abs(f.index - opt.smokeFrame) < Math.abs(best.index - opt.smokeFrame))
         ? f : best, null);
 
-    const pass = opt.mode === 'a'
+    const pass = opt.gateType === 'per-frame'
       ? worst.ssim >= opt.threshold
       : atSmoke.ssim >= opt.smoke;
 
@@ -552,14 +590,16 @@ function main() {
   /* ---- console table ---- */
   const graded = results.filter(r => !r.error);
   const w0 = Math.max(8, ...results.map(r => r.preset.length));
-  const header = opt.mode === 'a'
+  const header = opt.gateType === 'per-frame'
     ? `${pad('preset', w0, true)}  frames    mean       min   worst@  verdict`
     : `${pad('preset', w0, true)}  frames    mean   frame0   @${pad(opt.smokeFrame, 4, true)}    last  verdict`;
 
+  const excluded = ['feedback', 'grain', 'particles'].filter(t => opt.expect[t]);
   console.log('');
-  console.log(`  mode ${opt.mode.toUpperCase()}  ${opt.mode === 'a'
-    ? `strict gate, per-frame SSIM >= ${opt.threshold}`
-    : `informational, SSIM at frame ${opt.smokeFrame} >= ${opt.smoke}`}`);
+  console.log(`  mode ${opt.mode.toUpperCase()} (${opt.modeName})  ${opt.gateType === 'per-frame'
+    ? `per-frame SSIM >= ${opt.threshold}`
+    : `SSIM at frame ${opt.smokeFrame} >= ${opt.smoke}`}`);
+  console.log(`  excluding: ${excluded.join(' + ') || 'nothing'}`);
   console.log(`  A: ${rootA}`);
   console.log(`  B: ${rootB}`);
   console.log('');
@@ -572,7 +612,7 @@ function main() {
       continue;
     }
     const verdict = r.pass ? 'pass' : 'FAIL';
-    console.log(opt.mode === 'a'
+    console.log(opt.gateType === 'per-frame'
       ? `  ${pad(r.preset, w0, true)}  ${pad(r.count, 6)}  ${f4(r.mean)}  ${f4(r.min)}  ${pad(r.worstIndex, 6)}  ${verdict}`
       : `  ${pad(r.preset, w0, true)}  ${pad(r.count, 6)}  ${f4(r.mean)}  ${f4(r.first)}  ${f4(r.smokeSsim)}  ${f4(r.last)}  ${verdict}`);
   }
@@ -594,7 +634,7 @@ function main() {
   }
 
   /* ---- mode B curve ---- */
-  if (opt.mode === 'b' && !opt.quiet) {
+  if (opt.gateType === 'smoke' && !opt.quiet) {
     for (const r of graded) {
       console.log(`  ${r.preset} — SSIM curve`);
       const cols = 6;
@@ -622,7 +662,9 @@ function main() {
     kind: 'ripple-ssim-report',
     generated: new Date().toISOString(),
     mode: opt.mode,
-    gate: opt.mode === 'a'
+    modeName: opt.modeName,
+    excluded: opt.expect,
+    gate: opt.gateType === 'per-frame'
       ? { type: 'per-frame', threshold: opt.threshold }
       : { type: 'smoke', frame: opt.smokeFrame, threshold: opt.smoke,
           note: 'informational; feedback divergence over time is expected' },

@@ -273,7 +273,7 @@ public sealed partial class GlHost : IDisposable
         // feedback cleared the frame is dim enough that the grain becomes most
         // of the variance, and SSIM then measures noise against noise. Zeroing
         // it here is what makes the strict gate a test of the shaders.
-        if (_opt.NoFeedback) _draw.Grain = 0;
+        if (_opt.NoGrain) _draw.Grain = 0;
         if (_opt.NoParticles) _draw.PCount = 0;
         _host.AdvanceMotifs(dt, _draw, f);
         _host.AdvancePalette(dt, _draw, _preset.RotateByKey, f);

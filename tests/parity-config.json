@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "kind": "ripple-parity-config",
+
+  "_comment": [
+    "The Phase 1 cross-host parity gate, as data. Both hosts and all three tools read",
+    "this file, so a gate re-run cannot silently use different exclusions from the run",
+    "that established the baseline — which is exactly the risk when Phase 4 touches the",
+    "composite pass and someone re-runs the gate from memory of the flags.",
+    "",
+    "Run it with:  node tools/parity-gate.mjs --mode a",
+    "",
+    "Each entry in `exclude` removes a term from the render. They are NOT convenience",
+    "switches: every one is a term that cannot agree between two GL implementations by",
+    "construction, and each is justified by a measurement recorded in `why`. Adding to",
+    "this list weakens the gate. Do not add to it without a measurement, and record the",
+    "measurement here when you do.",
+    "",
+    "See README 'Cross-host parity gate' for the full rationale and results, and",
+    "CONTRACTS.md 'Rejected approaches' for what was tried and abandoned."
+  ],
+
+  "dump": {
+    "width": 960,
+    "height": 540,
+    "renderScale": 0.75,
+    "stride": 20
+  },
+
+  "exclusions": {
+    "feedback": {
+      "why": "Each frame warps the previous frame's buffer, so any difference is fed back and amplified. Two hosts running byte-identical shaders diverge over a 20 s run by design.",
+      "hostFlag": "--no-feedback"
+    },
+    "grain": {
+      "why": "composite.frag adds hash12(vUv * vec2(1913,1487) + fract(F_TIME*3.7)*137), a fract chain chaotic in the last bit of its input. An FMA contracted one way by the D3D compiler and another by the GL driver decorrelates it completely. Measured: leaving grain in scores 0.8634 mean, because with feedback cleared a fresh frame is 97.8% black at mean luma 3.7/255 and SSIM then measures 8-bit quantization noise.",
+      "hostFlag": "--no-grain"
+    },
+    "particles": {
+      "why": "The particle layer is GL_POINTS. ANGLE expands sized points to quads on D3D11 where desktop GL rasterizes them natively, so sub-pixel coverage differs. Measured: leaving particles in scores 0.9948 mean / 0.9425 min, and every failing frame's amplified diff is pure particle speckle with no structural difference.",
+      "hostFlag": "--no-particles"
+    }
+  },
+
+  "modes": {
+    "a": {
+      "name": "strict",
+      "isGate": true,
+      "description": "The real gate. Every term that cannot agree by construction is removed, so the diff measures shader math. A failure here is a genuine contract bug: diagnose it, do not threshold it away.",
+      "exclude": { "feedback": true, "grain": true, "particles": true },
+      "gate": { "type": "per-frame", "threshold": 0.995 },
+      "baseline": {
+        "date": "2026-08-20",
+        "mean": 1.0,
+        "min": 0.9998,
+        "presets": 13,
+        "frames": 780,
+        "harness": "ANGLE / Direct3D11, Intel UHD, RGBA16F",
+        "native": "OpenGL 4.3, Intel UHD, RGBA16F"
+      }
+    },
+    "b": {
+      "name": "informational",
+      "isGate": false,
+      "description": "Full feedback over the whole timeline. Not a pass/fail on drift; the point is the shape of the curve, because a cliff means a real bug hiding behind expected divergence.",
+      "exclude": { "feedback": false, "grain": false, "particles": false },
+      "gate": { "type": "smoke", "frame": 60, "threshold": 0.95 },
+      "baseline": {
+        "date": "2026-08-20",
+        "mean": 0.9924,
+        "min": 0.893,
+        "note": "Curve is flat rather than decaying: 0.97-0.999 band over 20 s, so the feedback loop is contractive. era-brent misses the frame-60 check at 0.9155 — most particle-dominated preset, highest-contrast palette."
+      }
+    }
+  },
+
+  "timelines": [
+    {
+      "path": "tests/fixtures/timeline-20s.json",
+      "role": "primary",
+      "why": "20 s off the synthetic driver at seed 0x5F356495. General-purpose coverage: onsets, beat sweep at 112 BPM, bass modulation, chord changes."
+    },
+    {
+      "path": "tests/fixtures/timeline-novelty.json",
+      "role": "coverage",
+      "why": "Constructed, not recorded. Fires novelty deliberately so the novelty->fractalMorph and novelty->feedbackDecay mappings are exercised; the primary timeline never fires one."
+    }
+  ]
+}

@@ -156,18 +156,23 @@ in both hosts and diff the frames. Both replay in exact step mode — timeline r
 frame *i*, `dt` pinned to `1/rate`, no wall clock anywhere in the path.
 
 ```powershell
-# 1. record a 20 s timeline off the synthetic driver (committed as a fixture)
-node tools/parity-harness.mjs --record tests/fixtures/timeline-20s.json --seconds 20 --rate 60
-
-# 2. dump that timeline from both hosts - mode A, the strict gate
-node tools/parity-harness.mjs --timeline tests/fixtures/timeline-20s.json `
-     --out captures/modeA-harness --all --stride 20 --no-feedback --no-particles
-.\run.ps1 -NoBuild --dump --no-feedback --no-particles --all `
-     --timeline tests/fixtures/timeline-20s.json --out captures/modeA-native --stride 20
-
-# 3. compare
-node tools/compare-ssim.mjs captures/modeA-harness captures/modeA-native --mode a
+.\build.ps1                                  # the gate does not build for you
+node tools/parity-gate.mjs --mode a           # dump both hosts, compare, exit nonzero on fail
+node tools/parity-gate.mjs --mode a --all-timelines
+node tools/parity-gate.mjs --mode b           # informational curve
 ```
+
+**Everything the gate depends on lives in `tests/parity-config.json`** — the exclusions, the
+dump geometry, the thresholds, the timelines and the recorded baselines. That is deliberate:
+when Phase 4 touches the composite pass and the gate is re-run, it has to re-run with the
+*same* exclusions that established the baseline, and a config file remembers those where a
+command line does not. Both hosts read it (`--parity-mode a`, via
+`src/Ripple/ParityProfile.cs` and `tools/parity-config.mjs`), and each dump's
+`manifest.json` records which terms it actually rendered, so `compare-ssim.mjs` refuses to
+quietly grade two dumps that were never comparable.
+
+The individual `--no-feedback` / `--no-grain` / `--no-particles` flags remain for
+diagnosis, and anything passed explicitly on the command line overrides the config.
 
 `parity-harness.mjs` drives `harness/index.html` in headless Chrome over the DevTools
 Protocol, calling the `window.__ripple` automation surface at the bottom of that file. Every
@@ -242,12 +247,30 @@ The lesson is the one the comment above `tlStepBegin()` already stated: *miss on
 host-side state and the diff quietly starts measuring whatever the host happened to be doing
 before the run began.* When the two hosts disagree, suspect host state before shaders.
 
-### Known coverage gap
+### Timelines
 
-The committed timeline never fires a `novelty` event — the synthetic driver sprinkles those at
-`dt/22` per frame and 20 s was not enough — so the `novelty -> fractalMorph` and
-`novelty -> feedbackDecay` mappings are untested by this gate. Record a longer timeline, or
-drive `novelty` manually, before relying on them.
+Two fixtures, both under `tests/fixtures/` and both listed in the parity config:
+
+| Fixture | How it was made | Covers |
+|---|---|---|
+| `timeline-20s.json` | Recorded off the synthetic driver at seed `0x5F356495` | General: onsets, beat sweep at 112 BPM, bass modulation, chord changes |
+| `timeline-novelty.json` | **Constructed** by `tools/make-timeline.mjs` from `timeline-novelty.script.json` | Fires `novelty` at 2 s / 7 s / 12 s / 17 s with peaks up to 1.0, plus a chord change and transient on the 12 s break |
+
+The synthetic driver's RNG is **seeded** (`RNG_SYNTH_SEED`, matching `SyntheticDriver` in the
+native host), so a recording is reproducible and `--seed N` draws a different one deliberately.
+Recording still cannot *target* a rare event, though — novelty fires at `dt/22` per frame, so
+20 s is a coin flip, which is why the coverage fixture is constructed rather than recorded.
+Constructed timelines are regenerated from a committed script, so the script is the artifact to
+read and edit:
+
+```powershell
+node tools/make-timeline.mjs --script tests/fixtures/timeline-novelty.script.json --summary
+```
+
+Verified: on `oil-wheel` the novelty pulses drive `decay` across 0.988–0.994 (the full
+`+0.006` mapping range) and on `era-europe72` they drive `beatMorph` across 0.36–0.90 and
+`cells` across 3.45–6.21, each correlating with `novelty` at r = 1.000. Mode A passes on this
+fixture at 1.0000 mean / 0.9995 min.
 
 ## Non-negotiables
 

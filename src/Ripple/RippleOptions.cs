@@ -46,6 +46,13 @@ public sealed class RippleOptions
     public bool NoFeedback;
 
     /// <summary>
+    /// Drop the film grain. Part of gate mode A, because the grain is a fract-chain
+    /// hash whose value is chaotic in the last bit of its input — see the measurement
+    /// recorded against "grain" in tests/parity-config.json.
+    /// </summary>
+    public bool NoGrain;
+
+    /// <summary>
     /// Diagnostic: drop the particle layer. Particles are GL_POINTS, and
     /// sub-pixel point rasterization is not specified tightly enough for two
     /// implementations to agree — ANGLE expands sized points to quads on D3D11,
@@ -61,6 +68,14 @@ public sealed class RippleOptions
     /// rather than leaving an SSIM number to be interpreted.
     /// </summary>
     public bool Trace;
+
+    /// <summary>Gate mode from tests/parity-config.json, or empty for none.</summary>
+    public string ParityMode = "";
+    public string ParityConfig = ParityProfile.DefaultPath;
+
+    // Set when the value came from the command line, so a parity mode never overrides
+    // something the caller asked for explicitly.
+    public bool SizeSpecified, ScaleSpecified, StrideSpecified;
 
     public static RippleOptions Parse(string[] args)
     {
@@ -84,10 +99,13 @@ public sealed class RippleOptions
                 case "--no-vsync": o.VSync = false; break;
                 case "--no-hot-reload": o.ShaderHotReload = false; break;
                 case "--no-feedback": o.NoFeedback = true; break;
+                case "--no-grain": o.NoGrain = true; break;
+                case "--parity-mode": o.ParityMode = Next(a); break;
+                case "--parity-config": o.ParityConfig = Next(a); break;
                 case "--no-particles": o.NoParticles = true; break;
                 case "--trace": o.Trace = true; break;
-                case "--scale": o.RenderScale = double.Parse(Next(a), System.Globalization.CultureInfo.InvariantCulture); break;
-                case "--stride": o.Stride = int.Parse(Next(a), System.Globalization.CultureInfo.InvariantCulture); break;
+                case "--scale": o.RenderScale = double.Parse(Next(a), System.Globalization.CultureInfo.InvariantCulture); o.ScaleSpecified = true; break;
+                case "--stride": o.Stride = int.Parse(Next(a), System.Globalization.CultureInfo.InvariantCulture); o.StrideSpecified = true; break;
                 case "--dump": o.Dump = true; o.Step = true; break;
                 case "--out": o.DumpOut = Next(a); break;
                 case "--all": o.DumpAll = true; break;
@@ -97,6 +115,7 @@ public sealed class RippleOptions
                     if (parts.Length != 2) throw new ArgumentException("--size wants WxH, e.g. 960x540");
                     o.Width = int.Parse(parts[0], System.Globalization.CultureInfo.InvariantCulture);
                     o.Height = int.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture);
+                    o.SizeSpecified = true;
                     break;
                 }
                 case "-h":
@@ -123,16 +142,22 @@ public sealed class RippleOptions
           Ripple [--preset <id|index>] [--song <title>] [--size 960x540] [--scale 0.75]
                  [--timeline <file.json> [--step]] [--no-vsync] [--no-hot-reload]
 
-          Ripple --dump --timeline <file.json> --out <dir> [--all] [--no-feedback]
-                 [--preset <id|index>] [--stride N] [--size 960x540] [--scale 0.75]
+          Ripple --dump --timeline <file.json> --out <dir> [--all]
+                 [--parity-mode a|b] [--preset <id|index>] [--stride N]
+                 [--size 960x540] [--scale 0.75] [--trace]
 
         Batch dump renders the whole timeline in exact step mode and writes every
-        Nth frame as a PNG, plus a manifest. Point tools/compare-ssim.mjs at this
-        directory and the harness's to run the Phase 1 parity gate.
+        Nth frame as a PNG, plus a manifest.
 
-        --no-feedback is gate mode A: the feedback chain is cleared before every
-        frame, so nothing accumulates and the diff measures shader math only.
-        Without it the dump is mode B, where cross-host divergence compounds by
-        design and the SSIM curve is informational rather than a pass/fail.
+        --parity-mode a|b reads the exclusions, dump size and stride from
+        tests/parity-config.json. Prefer it over the individual --no-* flags:
+        the gate has to re-run with the exclusions that established its
+        baseline, and a config file remembers those where a command line does
+        not. Normally you would not run this by hand at all — use
+        node tools/parity-gate.mjs --mode a, which drives both hosts and the
+        comparison from the same config.
+
+        The --no-* flags remain for diagnosis, and anything given explicitly on
+        the command line overrides the config.
         """;
 }

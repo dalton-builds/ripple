@@ -1267,7 +1267,14 @@ function mulberry32(seed) {
 }
 const RNG_PARTICLE_SEED = 0x9E3779B9;   // SHARED CONSTANT - changing it breaks parity
 const RNG_MOTIF_SEED    = 0x1B873593;   // SHARED CONSTANT - changing it breaks parity
+/* The synthetic driver's own stream. It used to call Math.random(), which made every
+   recording a fresh draw — so a timeline could not be regenerated and had to be
+   committed as an opaque fixture. Seeded, the same seed replays the same timeline, and
+   more usefully a chosen seed becomes a way to search for a recording that exercises a
+   particular mapping path. Matches SyntheticDriver's seed in the native host. */
+const RNG_SYNTH_SEED    = 0x5F356495;
 let rngMotif = mulberry32(RNG_MOTIF_SEED);
+let rngSynth = mulberry32(RNG_SYNTH_SEED);
 
 /* --- parity / deterministic step replay ------------------------------------
    PARITY.lock pins the drawing buffer to a fixed size and freezes the render
@@ -1282,6 +1289,11 @@ const PARITY = { lock: false, w: 960, h: 540, scale: 0.75, busy: false, stride: 
      shader math alone under test. That is the only form of this diff that can
      honestly be a pass/fail gate. */
   noFeedback: false,
+  /* Excluding the film grain is its own switch, mirroring the native --no-grain.
+     It is part of gate mode A because hash12() of vUv is a fract chain chaotic in
+     the last bit of its input, so the D3D and GL compilers decorrelate it — see the
+     measurement recorded against "grain" in tests/parity-config.json. */
+  noGrain: false,
   /* Diagnostic, not part of either mode: drop the particle layer. Particles are
      GL_POINTS, and sub-pixel point rasterization is not specified tightly
      enough for two implementations to agree — ANGLE expands sized points to
@@ -1932,7 +1944,7 @@ const LFO_SHAPES = ['sine', 'tri', 'saw', 'sqr', 'rnd'];
 
 const SYN = {};   // key -> { v, lfo:{ on, rate, depth, shape, seed } }
 FIELDS.forEach(f => {
-  SYN[f.key] = { v: f.def, lfo: { on: false, rate: 0.12, depth: 0.35, shape: 'sine', seed: Math.random() * 100 } };
+  SYN[f.key] = { v: f.def, lfo: { on: false, rate: 0.12, depth: 0.35, shape: 'sine', seed: rngSynth() * 100 } };
 });
 
 /* A default LFO set, so the harness is already alive on load rather than a
@@ -2866,14 +2878,16 @@ let tlKv = {}, tlBar, tlSeconds, tlRate, tlRecBtn, tlW, tlH, tlStride, tlStepBtn
     toast(TL.step ? 'step mode: 1 row = 1 frame' : 'step mode off');
   }, 'exact frame stepping: timeline frame i renders as frame i');
   tlFbBtn = btn(br2, 'MODE A', () => {
-    PARITY.noFeedback = !PARITY.noFeedback;
-    tlFbBtn.classList.toggle('on', PARITY.noFeedback);
-    toast(PARITY.noFeedback
-      ? 'mode A: feedback cleared every frame (strict gate)'
-      : 'mode B: full feedback (informational)');
-  }, 'gate mode A: clear the feedback chain every frame so the diff tests shader math with no accumulation');
+    const on = !PARITY.noFeedback;
+    PARITY.noFeedback = on; PARITY.noGrain = on; PARITY.noParticles = on;
+    tlFbBtn.classList.toggle('on', on);
+    toast(on
+      ? 'mode A: feedback + grain + particles excluded (strict gate)'
+      : 'mode B: full render (informational)');
+  }, 'gate mode A: exclude the three terms that cannot agree across GL implementations - see tests/parity-config.json');
   const dumpOpts = () => ({ stride: +tlStride.value, w: +tlW.value, h: +tlH.value,
-                            noFeedback: PARITY.noFeedback });
+                            noFeedback: PARITY.noFeedback, noGrain: PARITY.noGrain,
+                            noParticles: PARITY.noParticles });
   btn(br2, 'DUMP', () => parityDump(Object.assign({ all: false }, dumpOpts())),
       'render the whole timeline on the active preset, write every Nth frame');
   btn(br2, 'DUMP ALL', () => parityDump(Object.assign({ all: true }, dumpOpts())),
@@ -3101,14 +3115,14 @@ function buildFeatureFrame(dt) {
           SY.lastBar = RH.bar;
           // a chord change roughly every second bar — this is what makes the
           // rose bloom testable without any audio at all
-          if (RH.bar === 0 && Math.random() < 0.55) SY.cfluxEnv = 0.85 + 0.15 * Math.random();
+          if (RH.bar === 0 && rngSynth() < 0.55) SY.cfluxEnv = 0.85 + 0.15 * rngSynth();
         }
-      } else if (Math.random() < dt * 3.2 * F[23]) {
-        SY.onsetEnv = Math.max(SY.onsetEnv, 0.45 + 0.4 * Math.random());
+      } else if (rngSynth() < dt * 3.2 * F[23]) {
+        SY.onsetEnv = Math.max(SY.onsetEnv, 0.45 + 0.4 * rngSynth());
       }
       SY.cfluxEnv *= Math.exp(-dt / 0.45);
       SY.novEnv *= Math.exp(-dt / 1.6);
-      if (Math.random() < dt / 22) SY.novEnv = 0.9;
+      if (rngSynth() < dt / 22) SY.novEnv = 0.9;
       F[17] = Math.max(F[17], SY.onsetEnv);
       F[38] = Math.max(F[38], SY.cfluxEnv);
       F[42] = Math.max(F[42], SY.novEnv);
@@ -3562,11 +3576,9 @@ function stepOnce() {
   applyMapping(ST.live.mapping);
   govApply();                     // tier 0 is the identity, but keep the call
 
-  // Mode A drops the film grain along with the feedback carry — see the note
-  // in GlHost.DrawFrame(). The grain is a fract-chain hash of vUv, so it
-  // decorrelates between ANGLE and a desktop GL driver no matter what, and
-  // with the feedback cleared it would be most of the frame's variance.
-  if (PARITY.noFeedback) D.grain = 0;
+  // Each exclusion is its own switch, driven from tests/parity-config.json via
+  // the parity driver. Mode A sets all three.
+  if (PARITY.noGrain) D.grain = 0;
   if (PARITY.noParticles) D.pCount = 0;
   advanceMotifs(dt);
   advancePalette(dt);
@@ -3708,6 +3720,8 @@ async function parityDump(opts) {
   PARITY.h = Math.max(64, Math.round(opts.h || PARITY.h));
   PARITY.stride = stride;
   if (opts.noFeedback !== undefined) PARITY.noFeedback = !!opts.noFeedback;
+  if (opts.noGrain !== undefined) PARITY.noGrain = !!opts.noGrain;
+  if (opts.noParticles !== undefined) PARITY.noParticles = !!opts.noParticles;
   const n = TL.data.frames.length;
   const rate = TL.data.rate || 60;
   const list = opts.all ? LIBRARY.map((p, i) => i) : [ST.presetIdx];
@@ -3745,8 +3759,10 @@ async function parityDump(opts) {
         preset: id, presetName: ST.live.name || id, fractal: ST.live.fractal,
         width: PARITY.w, height: PARITY.h, renderScale: PARITY.scale,
         rate: rate, frames: n, stride: stride, mode: 'step',
-        feedback: !PARITY.noFeedback,                       // false = gate mode A
-        gateMode: PARITY.noFeedback ? 'A' : 'B',
+        feedback: !PARITY.noFeedback,
+        grain: !PARITY.noGrain,
+        particles: !PARITY.noParticles,
+        gateMode: PARITY.gateMode || (PARITY.noFeedback ? 'A' : 'B'),
         rngParticleSeed: RNG_PARTICLE_SEED, rngMotifSeed: RNG_MOTIF_SEED,
         colorBuffer: GLCAP.float ? 'RGBA16F' : 'RGBA8',
         gl: String(gl.getParameter(gl.VERSION)), renderer: glRendererName()
@@ -3793,12 +3809,13 @@ window.__ripple = {
   /* Record a timeline off the synthetic driver with dt pinned to 1/rate and no
      wall clock in the path.
 
-     Note the synthetic driver sprinkles onsets and chord changes with
-     Math.random(), so a recording is NOT reproducible run to run. That is why
-     the timeline is committed to the repo as a fixture instead of regenerated
-     per run: replay is what has to be deterministic, and it is. */
-  record(seconds, rate) {
+     Reproducible: the driver's RNG is reseeded here, so the same seed yields the
+     same timeline on any machine. Pass a seed to draw a different one — which is
+     how you go looking for a recording that fires a rare event, rather than
+     recording for longer and hoping. */
+  record(seconds, rate, seed) {
     useSynth();
+    rngSynth = mulberry32((seed === undefined || seed === null) ? RNG_SYNTH_SEED : seed >>> 0);
     tSec = 0; frameNo = 0;
     RH.phase = 0; RH.bar = 0; RH.beats = 0; RH.sectionPhase = 0;
     RH.onsetEnv = 0; RH.lastOnset = -9;
@@ -3811,7 +3828,10 @@ window.__ripple = {
       tlCapture(dt);
     }
     tlStop();
-    return tlExport();
+    const out = tlExport();
+    out.seed = (seed === undefined || seed === null) ? RNG_SYNTH_SEED : seed >>> 0;
+    out.generator = 'ripple-harness/0.1 synthetic seed ' + out.seed;
+    return out;
   },
 
   load(json) { tlLoad(json); return TL.data.frames.length; },
@@ -3826,6 +3846,7 @@ window.__ripple = {
     if (o.h) PARITY.h = Math.max(64, Math.round(o.h));
     if (o.stride) PARITY.stride = Math.max(1, Math.round(o.stride));
     PARITY.noFeedback = !!o.noFeedback;
+    PARITY.noGrain = !!o.noGrain;
     PARITY.noParticles = !!o.noParticles;
     if (typeof o.presetIdx === 'number') {
       ST.presetIdx = o.presetIdx;
@@ -3861,7 +3882,9 @@ window.__ripple = {
       frames: (TL.data && TL.data.frames.length) || 0,
       stride: PARITY.stride, mode: 'step',
       feedback: !PARITY.noFeedback,
-      gateMode: PARITY.noFeedback ? 'A' : 'B',
+      grain: !PARITY.noGrain,
+      particles: !PARITY.noParticles,
+      gateMode: PARITY.gateMode || (PARITY.noFeedback ? 'A' : 'B'),
       rngParticleSeed: RNG_PARTICLE_SEED, rngMotifSeed: RNG_MOTIF_SEED,
       colorBuffer: GLCAP.float ? 'RGBA16F' : 'RGBA8',
       gl: String(gl.getParameter(gl.VERSION)), renderer: glRendererName(),

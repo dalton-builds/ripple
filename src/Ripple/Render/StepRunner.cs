@@ -50,9 +50,9 @@ public sealed partial class GlHost
         double dt = 1.0 / rate;
         _tSec = _stepNext / rate;          // _stepNext is the row about to render
 
-        // Mode A: nothing carries between frames. Clearing here rather than in
-        // ResetForDeterministicRun also re-pins RT.cur to 0, so the ping-pong
-        // parity cannot drift between the hosts either.
+        // Feedback excluded: nothing carries between frames. Clearing here rather
+        // than in ResetForDeterministicRun also re-pins RT.cur to 0, so the
+        // ping-pong parity cannot drift between the hosts either.
         if (_opt.NoFeedback) _chain.Targets.ClearFeedback();
 
         BuildFeatureFrame(dt);             // copies row _stepNext, advances it
@@ -90,9 +90,14 @@ public sealed partial class GlHost
         var sw = Stopwatch.StartNew();
         int written = 0;
 
+        var excluded = new List<string>();
+        if (_opt.NoFeedback) excluded.Add("feedback");
+        if (_opt.NoGrain) excluded.Add("grain");
+        if (_opt.NoParticles) excluded.Add("particles");
+
         Console.WriteLine($"[dump] {indices.Length} preset(s) × {_timeline.Count} frames "
             + $"@ {w}x{h} scale {_renderScale:0.##}, writing every {stride}, "
-            + $"mode {(_opt.NoFeedback ? "A (no feedback)" : "B (full feedback)")}");
+            + $"excluding {(excluded.Count == 0 ? "nothing" : string.Join(" + ", excluded))}");
 
         foreach (int pi in indices)
         {
@@ -206,8 +211,15 @@ public sealed partial class GlHost
             frames = _timeline.Count,
             stride,
             mode = "step",
-            feedback = !_opt.NoFeedback,   // false = gate mode A
-            gateMode = _opt.NoFeedback ? "A" : "B",
+            // The full exclusion set, so compare-ssim.mjs can refuse to grade two
+            // dumps that were never comparable — and so a dump directory on its own
+            // says which experiment produced it.
+            feedback = !_opt.NoFeedback,
+            grain = !_opt.NoGrain,
+            particles = !_opt.NoParticles,
+            gateMode = string.IsNullOrEmpty(_opt.ParityMode)
+                ? (_opt.NoFeedback ? "A" : "B")
+                : _opt.ParityMode.ToUpperInvariant(),
             rngParticleSeed = Mulberry32.ParticleSeed,
             rngMotifSeed = Mulberry32.MotifSeed,
             colorBuffer = "RGBA16F",

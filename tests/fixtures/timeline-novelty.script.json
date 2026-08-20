@@ -1,0 +1,63 @@
+{
+  "kind": "ripple-timeline-script",
+  "note": "Constructed coverage fixture: fires novelty deliberately so the novelty->fractalMorph (11 presets) and novelty->feedbackDecay (oil-wheel, dark-star-drift) mappings are exercised. The primary recorded timeline never fires one — the synthetic driver sprinkles novelty at dt/22 per frame, so 20 s is a coin flip. Regenerate with: node tools/make-timeline.mjs --script tests/fixtures/timeline-novelty.script.json --summary",
+
+  "seconds": 20,
+  "rate": 60,
+
+  "rhythm": {
+    "bpm": 96,
+    "bpmConf": 0.85,
+    "beatsPerBar": 4,
+    "onset": { "tau": 0.15, "peak": 0.9 }
+  },
+
+  "chroma": {
+    "mode": "triads",
+    "changeEvery": 2.5,
+    "fluxPeak": 0.85,
+    "fluxTau": 0.45,
+    "keyConf": 0.7
+  },
+
+  "baseline": {
+    "rms": { "mean": 0.4, "amp": 0.12, "hz": 0.17 },
+    "peak": { "mean": 0.62, "amp": 0.14, "hz": 0.23 },
+    "loudSlow": 0.36,
+    "dynamics": { "mean": 0.34, "amp": 0.1, "hz": 0.11 },
+
+    "sub": { "mean": 0.3, "amp": 0.18, "hz": 0.13 },
+    "bass": { "mean": 0.45, "amp": 0.22, "hz": 0.31 },
+    "lowMid": { "mean": 0.34, "amp": 0.14, "hz": 0.19 },
+    "mid": { "mean": 0.3, "amp": 0.12, "hz": 0.27 },
+    "hiMid": { "mean": 0.28, "amp": 0.12, "hz": 0.37 },
+    "presence": { "mean": 0.32, "amp": 0.15, "hz": 0.43 },
+    "brilliance": { "mean": 0.26, "amp": 0.13, "hz": 0.53 },
+    "air": { "mean": 0.18, "amp": 0.1, "hz": 0.29 },
+
+    "flux": { "mean": 0.3, "amp": 0.16, "hz": 0.61 },
+    "percussivity": { "mean": 0.5, "amp": 0.2, "hz": 0.07 },
+    "centroid": { "mean": 0.44, "amp": 0.12, "hz": 0.09 },
+    "stereoWidth": { "mean": 0.5, "amp": 0.28, "hz": 0.05 },
+    "paletteMix": 0.5,
+    "era": 2
+  },
+
+  "_events_comment": [
+    "Four novelty pulses at 2 s, 7 s, 12 s and 17 s, tau 1.6 s to match the synthetic",
+    "driver's own novelty envelope (exp(-dt/1.6)). Peaks walk up to 1.0 so the mapping",
+    "range is covered at both ends rather than only in the middle: novelty->feedbackDecay",
+    "reaches Decay + 0.006 at v=1, and novelty->fractalMorph reaches BeatMorph * 1.5 and",
+    "Cells * 1.35. Stride 20 in the gate config samples frames 120, 420, 720, 1020 —",
+    "which is exactly where the pulse peaks are, so a dumped frame lands on each one."
+  ],
+  "events": [
+    { "field": "novelty", "at": 2.0, "peak": 0.55, "tau": 1.6, "note": "mid-range" },
+    { "field": "novelty", "at": 7.0, "peak": 0.9, "tau": 1.6, "note": "typical section change" },
+    { "field": "novelty", "at": 12.0, "peak": 1.0, "tau": 1.6, "note": "mapping extreme" },
+    { "field": "novelty", "at": 17.0, "peak": 0.75, "tau": 1.6, "note": "trailing" },
+
+    { "field": "chromaFlux", "at": 12.05, "peak": 1.0, "tau": 0.5, "note": "chord change on the big section break, fires the rose motif" },
+    { "field": "onset", "at": 12.0, "peak": 1.0, "tau": 0.2, "note": "transient on the break, fires the bolt motif" }
+  ]
+}

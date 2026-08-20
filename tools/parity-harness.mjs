@@ -33,7 +33,11 @@
  *   --preset ID       dump only this preset id or index
  *   --stride N        write every Nth frame                (default 10)
  *   --size WxH        drawing buffer                       (default 960x540)
- *   --no-feedback     gate mode A: clear the feedback chain every frame
+ *   --parity-mode M   read exclusions + geometry from tests/parity-config.json
+ *   --parity-config F  path to that config
+ *   --seed N          recording: synthetic driver seed (default 0x5F356495)
+ *   --no-feedback     diagnostic: clear the feedback chain every frame
+ *   --no-grain        diagnostic: drop the film grain
  *   --no-particles    diagnostic: drop the particle layer
  *   --trace           also write trace.json (per-frame draw state)
  *   --chrome PATH     Chrome executable
@@ -46,6 +50,7 @@ import { spawn } from 'node:child_process';
 import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
+import { loadParityConfig, parityMode } from './parity-config.mjs';
 
 /* ========================================================================== */
 /*  CLI                                                                       */
@@ -55,7 +60,10 @@ function parseArgs(argv) {
   const o = {
     record: null, seconds: 20, rate: 60,
     timeline: null, out: null, all: false, preset: null, stride: 10,
-    width: 960, height: 540, noFeedback: false, noParticles: false, trace: false,
+    width: 960, height: 540,
+    noFeedback: false, noGrain: false, noParticles: false, trace: false,
+    parityMode: null, parityConfig: 'tests/parity-config.json', seed: null,
+    sizeSpecified: false, strideSpecified: false,
     chrome: null, headful: false, swiftshader: false, keepOpen: false, help: false,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -72,8 +80,12 @@ function parseArgs(argv) {
       case '--out': o.out = next(); break;
       case '--all': o.all = true; break;
       case '--preset': o.preset = next(); break;
-      case '--stride': o.stride = Number(next()); break;
+      case '--stride': o.stride = Number(next()); o.strideSpecified = true; break;
       case '--no-feedback': o.noFeedback = true; break;
+      case '--no-grain': o.noGrain = true; break;
+      case '--parity-mode': o.parityMode = next(); break;
+      case '--parity-config': o.parityConfig = next(); break;
+      case '--seed': o.seed = Number(next()); break;
       case '--no-particles': o.noParticles = true; break;
       case '--trace': o.trace = true; break;
       case '--chrome': o.chrome = next(); break;
@@ -85,11 +97,29 @@ function parseArgs(argv) {
         const m = /^(\d+)[xX](\d+)$/.exec(next());
         if (!m) throw new Error('--size wants WxH, e.g. 960x540');
         o.width = +m[1]; o.height = +m[2];
+        o.sizeSpecified = true;
         break;
       }
       default: throw new Error(`unknown option: ${a}`);
     }
   }
+  // A parity mode supplies the exclusions and geometry; anything passed explicitly on
+  // the command line still wins, so a one-off probe needs no config edit.
+  if (o.parityMode) {
+    const cfgPath = resolve(o.parityConfig);
+    const cfg = loadParityConfig(cfgPath);
+    const m = parityMode(cfg, o.parityMode, cfgPath);
+    o.noFeedback = m.exclude.feedback;
+    o.noGrain = m.exclude.grain;
+    o.noParticles = m.exclude.particles;
+    if (!o.sizeSpecified && cfg.dump) {
+      if (cfg.dump.width) o.width = cfg.dump.width;
+      if (cfg.dump.height) o.height = cfg.dump.height;
+    }
+    if (!o.strideSpecified && cfg.dump?.stride) o.stride = cfg.dump.stride;
+    o.gateMode = o.parityMode.toUpperCase();
+  }
+
   if (!o.help && !o.record && !o.out)
     throw new Error('nothing to do: pass --record FILE and/or --out DIR');
   if (o.out && !o.timeline && !o.record)
@@ -202,8 +232,13 @@ async function launch(opt) {
   for (let i = 0; i < 200 && port === null; i++) {
     await sleep(50);
     if (!existsSync(portFile)) continue;
-    const first = readFileSync(portFile, 'utf8').split('\n')[0].trim();
-    if (first) port = Number(first);
+    // The file exists the instant Chrome opens it, before the port is written, and on
+    // Windows reading mid-write fails with EBUSY rather than returning a short read.
+    // Both cases mean "not ready yet", so keep polling instead of dying.
+    let first;
+    try { first = readFileSync(portFile, 'utf8').split('\n')[0].trim(); }
+    catch { continue; }
+    if (first && Number.isFinite(Number(first))) port = Number(first);
   }
   if (port === null) { try { proc.kill(); } catch {} throw new Error('Chrome never reported a debugging port'); }
 
@@ -292,9 +327,10 @@ async function main() {
     /* ---- record ---- */
     let timelinePath = opt.timeline ? resolve(opt.timeline) : null;
     if (opt.record) {
-      console.log(`[record] ${opt.seconds}s @ ${opt.rate} fps off the synthetic driver`);
+      console.log(`[record] ${opt.seconds}s @ ${opt.rate} fps off the synthetic driver, `
+        + `seed ${opt.seed === null ? 'default' : opt.seed}`);
       const tl = await b.eval(
-        `JSON.stringify(window.__ripple.record(${opt.seconds}, ${opt.rate}))`);
+        `JSON.stringify(window.__ripple.record(${opt.seconds}, ${opt.rate}, ${opt.seed === null ? 'undefined' : opt.seed}))`);
       const dest = resolve(opt.record);
       mkdirSync(dirname(dest), { recursive: true });
       writeFileSync(dest, tl);
@@ -325,16 +361,21 @@ async function main() {
 
       const outRoot = resolve(opt.out);
       mkdirSync(outRoot, { recursive: true });
+      const excluded = [
+        opt.noFeedback && 'feedback', opt.noGrain && 'grain', opt.noParticles && 'particles',
+      ].filter(Boolean);
       console.log(`[dump] ${chosen.length} preset(s) x ${n} frames @ ${opt.width}x${opt.height}, `
-        + `writing every ${opt.stride}, mode ${opt.noFeedback ? 'A (no feedback)' : 'B (full feedback)'}`);
+        + `writing every ${opt.stride}, excluding ${excluded.join(' + ') || 'nothing'}`);
 
       const started = Date.now();
       let written = 0;
 
       for (const p of chosen) {
+        if (opt.gateMode) await b.eval(`PARITY.gateMode = ${JSON.stringify(opt.gateMode)}`);
         const info = await b.eval(`JSON.stringify(window.__ripple.parityBegin(${JSON.stringify({
           presetIdx: p.index, w: opt.width, h: opt.height,
-          stride: opt.stride, noFeedback: opt.noFeedback, noParticles: opt.noParticles,
+          stride: opt.stride, noFeedback: opt.noFeedback, noGrain: opt.noGrain,
+          noParticles: opt.noParticles,
         })}))`).then(JSON.parse);
 
         const dir = join(outRoot, info.preset);
