@@ -53,6 +53,16 @@ public sealed class Analyzer
     private const int FluxHistory = 43;          // ~460 ms of flux, per §7.2
     private const double OnsetRefractory = 0.050;
     private const double OnsetDecay = 0.150;
+
+    /// <summary>
+    /// Envelope time constant for the F_FLUX field (not for onset detection, which still
+    /// sees raw per-hop flux and must, or it would smear the peak it looks for).
+    ///
+    /// 55 ms is ~5 hops at 93.75 fps: enough to bridge the hops where the half-wave
+    /// rectified difference is zero, short enough that a cymbal swell still reads as a rise
+    /// rather than as a plateau.
+    /// </summary>
+    private const double FluxEnvTau = 0.055;
     /// <summary>
     /// §7.3 specifies 6 s of onset envelope. Together with the median filter that put the
     /// estimate far enough behind a drifting tempo to miss §14's ±2 BPM (measured 2.56 BPM
@@ -92,6 +102,34 @@ public sealed class Analyzer
 
     /// <summary>Below this, freeze the phase accumulator. Plan §7.3, not negotiable.</summary>
     public const double ConfidenceFloor = 0.35;
+
+    /// <summary>
+    /// How much stronger the on-beat comb has to be than the off-beat one before the octave
+    /// logic doubles the raw ACF peak, and how far it has to fall back before the decision
+    /// is given up again. See <see cref="BeatCombRatio"/>.
+    ///
+    /// Measured over the synthetic signal space in GateDiagnostics: metronomic click tracks
+    /// score 1.00-1.02 (no alternation, nothing to disturb), and MusicLike — kick and bass
+    /// on the beat, hats on the half beat — scores 1.40 at 80 BPM and 1.56 at 88.
+    ///
+    /// CAVEAT, and it is the honest state of this constant: those are synthetic signals. The
+    /// recording the plan designates as the unambiguous diagnostic is `tight-backbeat`, and
+    /// it has not been captured yet. Re-fit against it before treating this as settled.
+    /// </summary>
+    private const double CombAlternation = 1.35, CombRelease = 1.15;
+
+    /// <summary>
+    /// Smoothing time constant of the comb ratio, and the ACF peak below which the octave
+    /// question is not asked at all. Both exist for reasons recorded at the use site.
+    /// </summary>
+    private const double CombTau = 1.5, CombMinPeak = 0.18;
+
+    /// <summary>
+    /// Above this the off-beat comb is empty rather than quiet, which means no subdivision
+    /// — see the note in <see cref="BeatCombRatio"/>. A real beat-against-subdivision
+    /// pattern measures 1.3-2.5; free-time material measures in the thousands.
+    /// </summary>
+    private const double CombSparseLimit = 6.0;
 
     /// <summary>
     /// How often the two expensive stages actually recompute, in hops.
@@ -159,10 +197,27 @@ public sealed class Analyzer
     private readonly float[] _fluxSort = new float[FluxHistory];
     private int _fluxAt;
     private double _prevFlux;
+
+    /// <summary>
+    /// F_FLUX's own normalizer, independent of the onset detector. Symmetric envelope
+    /// because flux is a rate of change, not a level: a peak follower on it would track
+    /// its maximum and sit there. See the note in <see cref="Onset"/>.
+    /// </summary>
+    private readonly Normalizer _fluxNorm = new(peakFollow: false, spanFloor: 0.015,
+                                                envTau: FluxEnvTau, windowOnEnvelope: true);
+    private double _fluxEnvN;
     private double _onsetImpulse;
     private double _lastOnsetTime = -1;
 
     private readonly float[] _onsetHist;
+
+    /// <summary>
+    /// The same onset envelope, but with each impulse scaled by the size of the flux peak
+    /// that fired it. Used only by <see cref="BeatCombRatio"/>. See the note there for why
+    /// the unit-height envelope cannot answer the beat-versus-subdivision question.
+    /// </summary>
+    private readonly float[] _strengthHist;
+    private double _onsetStrength;
     private int _onsetHistAt;
     private readonly float[] _bpmHist;
     private readonly float[] _bpmSort;
@@ -264,6 +319,7 @@ public sealed class Analyzer
         }
 
         _onsetHist = new float[Math.Max(16, (int)(TempoHistorySeconds * _fmt.FrameRate))];
+        _strengthHist = new float[_onsetHist.Length];
         // Sized by how often the estimate is PRODUCED, not by the hop rate: the
         // autocorrelation only runs every TempoEvery hops, so counting slots in hops made
         // the 2 s median span 8 s of wall time and put the drift error back over budget
@@ -379,9 +435,12 @@ public sealed class Analyzer
 
         Array.Clear(_fluxHist); _fluxAt = 0;
         _prevFlux = 0;
+        _fluxNorm.Reset(); _fluxEnvN = 0;
         _onsetImpulse = 0; _lastOnsetTime = -1;
 
-        Array.Clear(_onsetHist); _onsetHistAt = 0;
+        Array.Clear(_onsetHist); Array.Clear(_strengthHist);
+        _onsetStrength = 0; _onsetHistAt = 0;
+        CombRatio = 1; _combSmooth = 1; _octaveDoubled = false;
         Array.Clear(_bpmHist); _bpmHistAt = 0; _bpmHistCount = 0;
         _bpm = 0; _bpmConf = 0; _beatPhase = 0; _beatCount = 0; _beatFromOnset = false;
 
@@ -719,30 +778,127 @@ public sealed class Analyzer
         // refractory expires: measured on real audio, the onset impulse never decayed below
         // 0.53 and averaged 0.84, so every onset-driven motif fired continuously.
         bool peaked = _prevFlux >= flux && _prevFlux > thr;
-        double detectFlux = _prevFlux;
+        double peakFlux = _prevFlux;
         _prevFlux = flux;
 
         if (peaked && refractoryOver)
         {
             _onsetImpulse = 1;
+            // The SAME impulse, weighted by how big the flux peak that caused it actually
+            // was. F_ONSET has to stay a unit impulse — presets gate motifs on
+            // `onset > 0.82` and the parity fixtures encode it — but that unit height
+            // throws away the one thing that separates a beat from a subdivision, so the
+            // strength is kept alongside rather than folded in. Raw flux, deliberately
+            // unnormalized: BeatCombRatio only ever compares two combs of this signal
+            // against each other, and a common scale factor cancels in the ratio.
+            _onsetStrength = peakFlux;
             _lastOnsetTime = _time;
         }
         else
         {
-            _onsetImpulse *= Math.Exp(-_dt / OnsetDecay);
+            double k = Math.Exp(-_dt / OnsetDecay);
+            _onsetImpulse *= k;
+            _onsetStrength *= k;
         }
 
-        // Flux itself is reported normalized against its own recent range, so the shader
-        // sees a 0..1 field like every other. The raw ratio is tiny and would look dead.
-        double fluxN = Math.Clamp(detectFlux / Math.Max(thr * 1.6, 1e-6), 0, 1);
-        f[FF.Flux] = (float)fluxN;
+        // F_FLUX is §7.2's INDEPENDENT continuous drive, not a view of the onset detector.
+        // It used to be `clamp(detectFlux / (thr * 1.6))`, which was wrong twice over and
+        // measured p50 0.000 / p90 1.000 — two spikes and almost nothing between:
+        //
+        //  1. The divisor was the onset comparator's own threshold, so the field saturated
+        //     at 1 on essentially every onset and carried the same information as F_ONSET.
+        //     A clamp against a THRESHOLD is a decision, not a normalization.
+        //  2. Raw flux is a half-wave-rectified difference: `rise` sums only the positive
+        //     bin deltas, so on the hops where the spectrum is falling it is ~0. Measured
+        //     42% of frames below 0.02 on music-like material and 91% on a click track.
+        //     That is the zero spike, and no choice of divisor removes it.
+        //
+        // So smooth first — a 55 ms symmetric envelope bridges the rectification zeros
+        // without blurring gesture-scale change — then map onto the observed range with
+        // the clamp applied AFTER the affine map. The span floor is in the ratio's own
+        // units; 6.0 (the dB default) would be six times the whole range.
+        _fluxEnvN = _fluxNorm.Step(flux, _dt);
+        f[FF.Flux] = (float)_fluxEnvN;
         f[FF.Onset] = (float)_onsetImpulse;
 
         _onsetHist[_onsetHistAt] = (float)_onsetImpulse;
+        _strengthHist[_onsetHistAt] = (float)_onsetStrength;
         _onsetHistAt = (_onsetHistAt + 1) % _onsetHist.Length;
     }
 
     /* ------------------------------------------------------------ §7.3 tempo */
+
+    /// <summary>
+    /// Is <paramref name="lag"/> the beat, or half of it? Returns the strong comb's mean
+    /// over the weak comb's, folded at <c>2 * lag</c> — 1.0 means no alternation at all.
+    ///
+    /// THE ACF CANNOT ANSWER THIS, and that is not a tuning problem. When dense material
+    /// carries a steady subdivision — hats on the half beat, a ride on eighths — the onset
+    /// envelope's strongest periodicity genuinely IS the subdivision, so acf[lag] is the
+    /// peak and acf[2*lag] is necessarily no larger. Every score that is monotone in the
+    /// ACF therefore has the subdivision winning by construction, harmonic sums included:
+    /// measured, MusicLike at 88 BPM reported 170.18 with confidence 0.88 both before and
+    /// after a harmonic-sum rewrite, because promoting the longer lag would have required
+    /// acf[66] &gt; 2.35 * acf[33] and acf[33] was the peak.
+    ///
+    /// What does separate them is that beats are LOUDER than the subdivisions between them
+    /// — kick and bass on the beat, hats alone off it. So fold the strength-weighted onset
+    /// envelope at 2*lag, find the strongest phase, and compare it against the phase half a
+    /// period away. A metronomic click track alternates not at all and scores ~1, so this
+    /// cannot disturb a source that was already right.
+    /// </summary>
+    private double BeatCombRatio(int lag)
+    {
+        int n = _strengthHist.Length;
+        int period = lag * 2;
+        // Two full periods minimum, or the combs are averages of one or two taps each and
+        // the ratio is noise.
+        if (lag < 1 || period * 2 > n) return 1;
+
+        double bestMean = -1;
+        int bestPhase = 0;
+        Span<double> comb = stackalloc double[period];
+
+        for (int phase = 0; phase < period; phase++)
+        {
+            double sum = 0;
+            int taps = 0;
+            for (int i = phase; i < n; i += period)
+            {
+                // Newest first, same walk as the autocorrelation, so the two agree about
+                // which end of the circular buffer is "now".
+                sum += _strengthHist[(_onsetHistAt - 1 - i + n) % n];
+                taps++;
+            }
+            comb[phase] = taps > 0 ? sum / taps : 0;
+            if (comb[phase] > bestMean) { bestMean = comb[phase]; bestPhase = phase; }
+        }
+
+        double weak = comb[(bestPhase + lag) % period];
+        if (bestMean <= 1e-12) return 1;
+        double ratio = weak > 1e-12 ? bestMean / weak : double.PositiveInfinity;
+
+        // An off-beat comb that is EMPTY is not evidence of alternation. It is evidence that
+        // there are no off-beat onsets at all — and material with no subdivision has no
+        // subdivision to mistake for the beat, so the raw peak was already right. The honest
+        // answer above the limit is therefore "no alternation", not a very large number.
+        //
+        // This is what the first cut got wrong. The ratio was unbounded, and on arrhythmic
+        // clicks it reached 3.8e6 and dragged the smoothed value past every threshold for the
+        // rest of the run — halving the reported tempo of exactly the free-time population
+        // §7.3 exists to leave alone.
+        return ratio > CombSparseLimit ? 1 : ratio;
+    }
+
+    /// <summary>Last comb ratio computed, for the octave diagnostics.</summary>
+    public double CombRatio { get; private set; } = 1;
+
+    /// <summary>The smoothed ratio and the latched decision, for the octave diagnostics.</summary>
+    public double CombSmooth => _combSmooth;
+    public bool OctaveDoubled => _octaveDoubled;
+
+    private double _combSmooth = 1;
+    private bool _octaveDoubled;
 
     private void Tempo(Span<float> f)
     {
@@ -828,28 +984,95 @@ public sealed class Analyzer
             return;
         }
 
-        // Octave disambiguation, §7.3. A periodicity at `lag` also correlates at 2*lag,
-        // 3*lag and so on, and for a metronomic source those multiples score almost as
-        // high as the fundamental — so the raw peak lands on a multiple often enough to
-        // matter. It landed on 2*lag for 120, 150 and 180 BPM click tracks.
+        // Octave disambiguation, §7.3 — rewritten in Phase 4 against measurement. The
+        // version this replaces walked div = 2..4 and took the shorter lag whenever
+        // `acf[cand] > acf[chosen] * 0.70`, and it was wrong in two ways that compounded:
         //
-        // The resolution only ever moves to a SHORTER lag: the fundamental period is the
-        // shortest lag that still correlates strongly, and a longer lag scoring well is
-        // evidence of a multiple rather than of a slower tempo. Moving the other way is
-        // what halved those three tempos.
-        int chosen = bestLag;
-        for (int div = 2; div <= 4; div++)
+        //  1. THE BASELINE MOVED. `chosen` was reassigned inside the loop, so div=3 was
+        //     compared against the already-halved candidate rather than against the raw
+        //     peak. The effective bar fell 0.70 -> 0.49 -> 0.343 across the three
+        //     iterations: a ratchet toward ever-shorter lags.
+        //  2. IT COULD ONLY DIVIDE. That is a fatal limitation when the raw ACF peak is
+        //     ALREADY on the subdivision, which is the normal case for dense material.
+        //     Measured on MusicLike (kick and bass on the beat, hats on the half beat):
+        //     at 88 BPM the raw peak sat at lag 33 = 170 BPM, reported with confidence
+        //     0.88. High confidence, wrong octave, and no amount of dividing recovers it.
+        //     The tell is that 108 BPM tracked correctly only because its subdivision,
+        //     216 BPM, falls outside the [60,180] search range.
+        //
+        // So score candidates on BOTH sides of the raw peak with a harmonic sum: the
+        // weighted total of the ACF at a candidate lag and its own multiples. This is the
+        // discriminator a single-lag comparison cannot be, because a true fundamental is
+        // supported by all of its multiples while a subdivision is supported only by the
+        // even ones — the odd half-multiples of the real period land in ACF troughs.
+        //
+        // Deliberately NOT normalized by the weight sum: a candidate whose multiples fall
+        // outside the search range has genuinely less evidence behind it, and dividing that
+        // away is what makes a period and twice that period score identically.
+        // Static, and the ACF passed in: a local function cannot close over a stackalloc
+        // span (CS8175), and heap-allocating the ACF to make it closable would put an
+        // allocation on the analysis thread's hot path.
+        static double Harmonic(ReadOnlySpan<double> acf, int lag, int lagMax)
         {
-            int cand = (int)Math.Round(bestLag / (double)div);
-            if (cand < lagMin) break;
-            // 0.7 rather than a tighter fraction: the beat period is rarely a whole number
-            // of frames (132 BPM is 42.6 at a 512-sample hop), and onsets are quantized to
-            // frame boundaries, so correlation at the fundamental is systematically
-            // degraded relative to its own multiples. A 132 BPM click track reported 66.
-            // Choosing the shorter lag is the safe direction — a genuinely slow tempo has
-            // nothing at all at half its period.
-            if (acf[cand] > acf[chosen] * 0.70) chosen = cand;
+            double sum = 0;
+            for (int m = 1; m <= 4; m++)
+            {
+                int l = lag * m;
+                if (l > lagMax) break;
+                sum += acf[l] / m;
+            }
+            return sum;
         }
+
+        int chosen = bestLag;
+        double bestScore = Harmonic(acf, bestLag, lagMax);
+        foreach (double ratio in (double[])[0.25, 1.0 / 3, 0.5])
+        {
+            int cand = (int)Math.Round(bestLag * ratio);
+            if (cand < lagMin || cand > lagMax || cand == bestLag) continue;
+
+            // The margin is what keeps a metronomic source stable. Onsets are quantized to
+            // hop boundaries and the beat period is rarely a whole number of hops (132 BPM
+            // is 42.6), so the ACF at the true fundamental is systematically a little
+            // degraded relative to its own multiples. Requiring 8% more harmonic support
+            // than the raw peak means a near-tie leaves the peak alone; it is only displaced
+            // when the evidence is clear. The BASELINE IS FIXED at the raw peak's score for
+            // every candidate — that is defect 1 above, and it is the whole reason this is a
+            // scored comparison rather than a sequential walk.
+            double s = Harmonic(acf, cand, lagMax);
+            if (s > bestScore * 1.08 && s > Harmonic(acf, chosen, lagMax)) chosen = cand;
+        }
+
+        // The other direction: the raw peak is on the SUBDIVISION and the beat is twice as
+        // long. See BeatCombRatio for why no ACF-derived score can detect this, and what
+        // can. Always MEASURED so the diagnostics can see it; acted on only under both
+        // gates below.
+        CombRatio = bestLag * 2 <= lagMax ? BeatCombRatio(bestLag) : 1;
+
+        // GATE 1 — there has to be a periodicity for its octave to be a question at all.
+        // On free-time material the weak comb is near zero and the ratio runs away:
+        // measured on arrhythmic clicks, p90 199.32, which would spuriously halve the
+        // reported tempo of the one population §7.3 most wants left alone. A peaky ACF
+        // excludes it, and it is the same population the 0.35 confidence floor excludes
+        // downstream — so this gate agrees with that one rather than second-guessing it.
+        bool peaky = best > CombMinPeak;
+
+        // GATE 2 — smoothing with hysteresis. The ratio is a 4 s statistic recomputed every
+        // TempoEvery hops, and it wobbles across any fixed threshold. A FLAPPING octave
+        // decision is worse than either octave on its own: the BPM median then straddles the
+        // two and the stability term reads that spread as no tempo at all. Measured with an
+        // unsmoothed threshold, MusicLike at 88 BPM landed on the CORRECT octave and
+        // confidence still fell from 0.88 to 0.00, which trips the fallback and throws away
+        // the lock that was just recovered.
+        _combSmooth += ((peaky ? CombRatio : 1) - _combSmooth)
+                     * (1 - Math.Exp(-_dt * TempoEvery / CombTau));
+        _octaveDoubled = _octaveDoubled ? _combSmooth > CombRelease
+                                        : _combSmooth > CombAlternation;
+
+        // Not applied to a lag the harmonic sum already moved: the two mechanisms answer the
+        // same question, and letting both fire could halve and then double, arriving at an
+        // octave neither of them chose.
+        if (chosen == bestLag && _octaveDoubled && bestLag * 2 <= lagMax) chosen = bestLag * 2;
 
         // Parabolic interpolation around the peak. Without it, lag quantization alone is
         // ~2.6 BPM at 120 BPM — wider than the ±2 BPM the drifting-click-track test
@@ -1231,9 +1454,32 @@ public sealed class Analyzer
     /// treatment as the bands. Same asymmetric attack/release and same fast-open,
     /// slow-close window, so rms and peak behave like a band rather than like raw dB.
     /// </summary>
-    private sealed class Normalizer(bool peakFollow = true)
+    /// <param name="spanFloor">
+    /// The narrowest window this will divide by. Callers feeding dB want §7.1's 6 dB. A
+    /// caller feeding a bare 0..1 ratio needs a floor in that ratio's own units — the 6.0
+    /// default is six times the whole range, so it would pin the field near zero forever.
+    /// </param>
+    /// <param name="envTau">Time constant of the symmetric envelope, when not peak-following.</param>
+    /// <param name="windowOnEnvelope">
+    /// Track the hi/lo window on the ENVELOPE rather than on the raw input.
+    ///
+    /// It matters whenever the envelope is much smoother than the input, because then the
+    /// numerator is a smoothed value while the denominator is the spread of the raw
+    /// extremes, and the field can only ever reach a fraction of its range. Measured on
+    /// F_FLUX with a 55 ms symmetric envelope against a raw-extremes window: p90 0.229, so
+    /// the top three quarters of 0..1 were unreachable.
+    ///
+    /// The BANDS must not do this, and that is not an oversight — see the LevelGamma note.
+    /// Their envelope is a 10 ms peak follower, close enough to the raw peaks that tracking
+    /// the window on it instead pinned every band at 0.79-0.85.
+    /// </param>
+    private sealed class Normalizer(bool peakFollow = true, double spanFloor = 6.0,
+                                    double envTau = 0.150, bool windowOnEnvelope = false)
     {
         private readonly bool _peakFollow = peakFollow;
+        private readonly double _spanFloor = spanFloor;
+        private readonly double _envTau = envTau;
+        private readonly bool _windowOnEnvelope = windowOnEnvelope;
         private double _env, _hi, _lo;
         private bool _primed;
 
@@ -1256,12 +1502,17 @@ public sealed class Analyzer
                 // Symmetric, for quantities that are not levels. A peak follower on a crest
                 // factor or a spectral centroid tracks its maximum, not its value, and both
                 // then sit at the top of their own window permanently.
-                _env += (value - _env) * (1 - Math.Exp(-dt / 0.150));
+                _env += (value - _env) * (1 - Math.Exp(-dt / _envTau));
             }
 
-            _hi = value > _hi ? value : _hi + (value - _hi) * (1 - Math.Exp(-dt / 3.0));
-            _lo = value < _lo ? value : _lo + (value - _lo) * (1 - Math.Exp(-dt / 8.0));
-            return Math.Clamp((_env - _lo) / Math.Max(_hi - _lo, 6.0), 0, 1);
+            double w = _windowOnEnvelope ? _env : value;
+            _hi = w > _hi ? w : _hi + (w - _hi) * (1 - Math.Exp(-dt / 3.0));
+            _lo = w < _lo ? w : _lo + (w - _lo) * (1 - Math.Exp(-dt / 8.0));
+
+            // The clamp comes LAST, after the affine map onto the observed window.
+            // Clamping against a threshold first and calling the result normalized is
+            // exactly what made F_FLUX binary — see Onset().
+            return Math.Clamp((_env - _lo) / Math.Max(_hi - _lo, _spanFloor), 0, 1);
         }
     }
 }

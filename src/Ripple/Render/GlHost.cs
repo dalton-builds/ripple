@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using Ripple.Audio;
 using Ripple.Features;
 using Ripple.Presets;
+using Ripple.Ui;
 using Silk.NET.Input;
 using Silk.NET.Maths;
 using Silk.NET.OpenGL;
@@ -60,7 +61,40 @@ public sealed partial class GlHost : IDisposable
     public GlHost(RippleOptions options)
     {
         _opt = options;
-        _renderScale = options.RenderScale;
+
+        // The config is the DEFAULT and the command line is the OVERRIDE — but ONLY for an
+        // interactive run. Every measurement run reads stock defaults instead, because a
+        // parity gate or a budget gate that picked up whatever is in someone's %APPDATA%
+        // would silently stop being a gate. The budget run is the sharpest case: the config
+        // enables audio by default, which would start the analysis thread and put it in
+        // competition with the render loop being measured, on top of a timeline that makes
+        // its output unused.
+        bool interactive = !options.Dump
+                        && string.IsNullOrEmpty(options.ParityMode)
+                        && !options.BudgetTest
+                        && options.SoakHours <= 0;
+
+        _cfg = interactive ? RippleConfig.LoadOrCreate() : new RippleConfig();
+        if (interactive) ApplyConfigDefaults();
+
+        _renderScale = _opt.RenderScale;
+    }
+
+    /// <summary>
+    /// Fold config values into the options, for every field the caller did not set
+    /// explicitly. The *Specified flags already exist for the parity profile's benefit and
+    /// mean exactly the right thing here too.
+    /// </summary>
+    private void ApplyConfigDefaults()
+    {
+        if (!_opt.SizeSpecified) { _opt.Width = _cfg.Width; _opt.Height = _cfg.Height; }
+        if (!_opt.ScaleSpecified) _opt.RenderScale = _cfg.RenderScale;
+        if (string.IsNullOrEmpty(_opt.Preset)) _opt.Preset = _cfg.Preset;
+
+        // Audio defaults ON in the config and OFF on the command line. First run with no
+        // flags has to react to sound, or it is not the thing the prototype gate describes.
+        if (!_opt.Audio) _opt.Audio = _cfg.Audio;
+        _opt.VSync = _opt.VSync && _cfg.VSync;
     }
 
     // ------------------------------------------------------------------ run
@@ -168,12 +202,33 @@ public sealed partial class GlHost : IDisposable
         }
 
         SetUpInput();
+
+        if (Measuring)
+        {
+            // A measurement run gets the GPU timer and nothing else. Hotkeys, the tray icon
+            // and config hot-reload would all put work and allocation inside the window
+            // being measured, and the governor stepping mid-run would change what the p99 is
+            // a p99 of.
+            _gpuTimer = new GpuTimer(_gl);
+            _governor.Auto = false;
+            _governor.SetTargetFps(60);
+            StartMeasurementRun();
+        }
+        else
+        {
+            StartDeskLayer();
+        }
+
         Console.WriteLine($"[ripple] {_preset.Id} · {_chain.ResolvedFamily} · {_opt.Width}x{_opt.Height} @ {_renderScale:0.##}x");
     }
 
     private void OnClosing()
     {
-        // Audio first: the capture and analysis threads must stop before the GL objects
+        // The desk layer first: it owns the geometry save, and saving it after the window is
+        // torn down reads back a destroyed HWND and persists zeros.
+        StopDeskLayer();
+
+        // Audio next: the capture and analysis threads must stop before the GL objects
         // they feed go away.
         if (_audio is not null) ReportDspCost();
         _audio?.Dispose();
@@ -284,6 +339,8 @@ public sealed partial class GlHost : IDisposable
 
             // The preset's era still comes from the preset until Phase 3 wires up SMTC.
             f[FF.Era] = _preset.EraId;
+
+            MaybeAutoAdvance(f);
         }
         else
         {
@@ -449,7 +506,14 @@ public sealed partial class GlHost : IDisposable
 
         _shaders.PollReload();
         _presets.PollReload();
+        PollConfig();
         CheckRecordingDeadline();
+
+        // Both run on the render thread on purpose: a hotkey may resize a render target and
+        // a tray command may rebuild a palette, and neither is legal from another thread
+        // with no GL context bound.
+        _hotkeys?.Drain(DoAction);
+        _tray?.Drain(OnTrayCommand);
 
         double dt;
         if (_timeline is not null && _opt.Step)
@@ -467,7 +531,10 @@ public sealed partial class GlHost : IDisposable
 
         if (_paused) { _chain.Present(_window.FramebufferSize.X, _window.FramebufferSize.Y); return; }
 
+        if (!PumpIdleState(dt)) return;
+
         var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        _gpuTimer?.Begin();
 
         BuildFeatureFrame(dt);
         DrawFrame(dt);
@@ -479,8 +546,62 @@ public sealed partial class GlHost : IDisposable
         _chain.Present(_window.FramebufferSize.X, _window.FramebufferSize.Y);
 
         _lastFrameMs = System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
+
+        // GPU time when the driver gives it to us, wall clock otherwise. See GpuTimer for
+        // why the difference matters to the control loop.
+        double gpuMs = _gpuTimer?.End() ?? -1;
+        bool gpuTimed = gpuMs >= 0;
+        double measured = gpuTimed ? gpuMs : _lastFrameMs;
+        _governor.Tick(dt, measured, gpuTimed);
+
+        if (Measuring && MeasurementTick(measured)) { _window.Close(); return; }
+
+        MaybeHud(dt);
+
         if (!(_timeline is not null && _opt.Step)) _tSec += dt;
         _frameNo++;
+    }
+
+    /// <summary>True for the two non-interactive measurement runs (§11's budget and soak).</summary>
+    private bool Measuring => _opt.BudgetTest || _opt.SoakHours > 0;
+
+    /// <summary>
+    /// §11's idle handling, on the render side. Returns false when this frame should not be
+    /// drawn at all.
+    ///
+    /// The HIDDEN case blocks on the event loop rather than sleeping in a spin — the plan is
+    /// explicit that 1 fps is not good enough, and it is right: a 1 fps loop still wakes the
+    /// CPU, still holds the context, and still shows up in a power profile. Thread.Sleep on
+    /// the QUIET path is fine by contrast, because the window is visible and we do intend to
+    /// come back in a tenth of a second.
+    /// </summary>
+    private bool PumpIdleState(double dt)
+    {
+        bool visible = _visible && !WindowChrome.IsMinimized(_hwnd);
+        bool audioIdle = _audio?.Idle ?? false;
+
+        bool draw = _idle.ShouldRender(dt, audioIdle, visible);
+        _host.IdleDim = _idle.Dim;
+        _host.MasterIntensity = _intensity;
+
+        if (_idle.Current == IdleController.State.Hidden)
+        {
+            // BLOCK, do not poll. Silk.NET's DoEvents maps to glfwPollEvents, which returns
+            // immediately — calling it in a Sleep loop is exactly the 1 fps spin §11 rules
+            // out. glfwWaitEventsTimeout parks the thread in the OS until a message arrives,
+            // so a restore or a tray click wakes it instantly and an idle minute costs
+            // nothing. The timeout is only a safety valve against a lost wakeup.
+            WaitForEvents(0.25);
+            return false;
+        }
+
+        if (!draw && _idle.SleepSeconds > 0)
+        {
+            Thread.Sleep((int)Math.Clamp(_idle.SleepSeconds * 1000, 1, 100));
+            return false;
+        }
+
+        return draw;
     }
 
     private void OnFramebufferResize(Vector2D<int> size)
@@ -498,28 +619,41 @@ public sealed partial class GlHost : IDisposable
         foreach (var kb in _input.Keyboards) kb.KeyDown += OnKeyDown;
     }
 
+    /// <summary>
+    /// Window-local keys. These are the plan's bindings as bare letters, which is what they
+    /// can be once the window has focus — see the note in <see cref="Ui.HotKeys"/> for why
+    /// the unprefixed letters are NOT registered system-wide. Both paths funnel into
+    /// DoAction, so a binding cannot mean two things depending on how it arrived.
+    /// </summary>
     private void OnKeyDown(IKeyboard kb, Key key, int _)
     {
         switch (key)
         {
-            case Key.Escape:
-                _window.Close();
-                break;
+            case Key.Escape: _window.Close(); break;
+            case Key.Q: DoAction(HotkeyAction.Quit); break;
+
             case Key.Right:
-                SelectPreset((_presetIndex + 1) % _presets.Library.Count);
-                Console.WriteLine($"[preset] {_preset.Id} — {_preset.Name}");
-                break;
-            case Key.Left:
-                SelectPreset((_presetIndex - 1 + _presets.Library.Count) % _presets.Library.Count);
-                Console.WriteLine($"[preset] {_preset.Id} — {_preset.Name}");
-                break;
-            case Key.Space:
-                _paused = !_paused;
-                break;
+            case Key.N: DoAction(HotkeyAction.NextPreset); break;
+
+            case Key.Left: DoAction(HotkeyAction.PrevPreset); break;
+
+            case Key.Space: DoAction(HotkeyAction.TogglePause); break;
+            case Key.F: DoAction(HotkeyAction.Fullscreen); break;
+            case Key.L: DoAction(HotkeyAction.LockPreset); break;
+            case Key.S: DoAction(HotkeyAction.Screenshot); break;
+            case Key.LeftBracket: DoAction(HotkeyAction.IntensityDown); break;
+            case Key.RightBracket: DoAction(HotkeyAction.IntensityUp); break;
+            case Key.V: DoAction(HotkeyAction.ToggleVisible); break;
+
             case Key.D:
+                // D both toggles the periodic HUD and prints one line immediately, so a
+                // single press still answers "what is it doing right now".
+                DoAction(HotkeyAction.ToggleHud);
                 Console.WriteLine($"[hud] {_preset.Id} · {_chain.ResolvedFamily} · "
                     + $"{_chain.Targets.Pw}x{_chain.Targets.Ph} · {_lastFrameMs:0.00} ms · "
-                    + $"decay {_draw.Decay:0.0000} · limiter {_host.SafeScale:0.000} · flash {_host.FlashRate:0.0} Hz");
+                    + $"tier {_governor.Level} · {_idle.Current} · "
+                    + $"decay {_draw.Decay:0.0000} · limiter {_host.SafeScale:0.000} · "
+                    + $"flash {_host.FlashRate:0.0} Hz · intensity {_intensity:0.00}");
                 break;
         }
     }

@@ -104,6 +104,19 @@ public sealed class PresetStore : IDisposable
         return result;
     }
 
+    /// <summary>
+    /// Every preset's id, in library order. Exists so the tray menu does not have to reach
+    /// into the raw JsonObject to build a list of names — a UI that indexes ["id"] itself is
+    /// a UI that breaks when the preset schema moves.
+    /// </summary>
+    public List<string> Ids()
+    {
+        var ids = new List<string>(_library.Count);
+        for (int i = 0; i < _library.Count; i++)
+            ids.Add((string?)_library[i]["id"] ?? $"preset {i}");
+        return ids;
+    }
+
     /// <summary>Index a preset by its <c>id</c>, or -1.</summary>
     public int IndexOf(string id)
     {

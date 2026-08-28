@@ -46,6 +46,9 @@ public sealed class FeedbackChain : IDisposable
     /// <summary>The family actually drawn last frame, after stub fallback.</summary>
     public string ResolvedFamily { get; private set; } = "warp_fbm";
 
+    /// <summary>Families already warned about, so the log carries one line rather than 60/s.</summary>
+    private readonly HashSet<string> _warnedFamilies = new(StringComparer.Ordinal);
+
     public FeedbackChain(GL gl, ShaderLoader loader, PaletteLut palette, ParticleSystem particles)
     {
         _gl = gl;
@@ -134,7 +137,19 @@ public sealed class FeedbackChain : IDisposable
 
         var family = d.Fractal;
         if (!_fractals.ContainsKey(family))
-            family = FractalStubs.TryGetValue(family, out var sub) ? sub : "warp_fbm";
+        {
+            string sub = FractalStubs.GetValueOrDefault(family, "warp_fbm");
+
+            // Warn ONCE per missing family. Per-frame this would be 60 lines a second, which
+            // is not a warning — it is a way of making sure nobody reads the log. The set is
+            // the memo: kleinian, ifs_flame and mandelbulb were never built, and a preset
+            // asking for one must fall back visibly rather than silently or fatally.
+            if (_warnedFamilies.Add(family))
+                Console.Error.WriteLine($"[fractal] '{family}' is not built — "
+                    + $"falling back to '{sub}' (preset asked for it; this is not fatal)");
+
+            family = sub;
+        }
         ResolvedFamily = family;
 
         var fp = _fractals[family];
@@ -235,7 +250,8 @@ public sealed class FeedbackChain : IDisposable
         _composite.U1("uGrain", (float)d.Grain);
         _composite.U1("uVignette", (float)d.Vignette);
         _composite.U1("uSaturate", (float)d.Saturate);
-        _composite.U1("uIdle", 1f);
+        _composite.U1("uIdle", (float)h.IdleDim);
+        _composite.U1("uIntensity", (float)h.MasterIntensity);
         _composite.U1("uSafetyScale", (float)h.SafeScale);
         _composite.U1("uMaxBright", (float)d.MaxBright);
         _composite.U1("uHueRate", (float)h.HueRate);
@@ -254,6 +270,30 @@ public sealed class FeedbackChain : IDisposable
         _gl.BlitFramebuffer(0, 0, rt.W, rt.H, 0, 0, windowWidth, windowHeight,
             ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Linear);
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+    }
+
+    /// <summary>
+    /// Write the composite target to a PNG. Reads the composite FBO rather than the back
+    /// buffer, for the same reason the parity dump does: nothing from the window compositor
+    /// is in the path, and it works with the window hidden or occluded.
+    ///
+    /// Allocates a full readback buffer per call. That is fine and deliberate — this runs on
+    /// a keypress, not per frame, so keeping a permanent buffer around would cost the
+    /// footprint budget something for a feature used a few times a day.
+    /// </summary>
+    public void SavePng(GL gl, string path)
+    {
+        var rt = Targets;
+        var pixels = new byte[rt.W * rt.H * 4];
+        gl.BindFramebuffer(FramebufferTarget.Framebuffer, rt.FinalFbo);
+        unsafe
+        {
+            fixed (byte* p = pixels)
+                gl.ReadPixels(0, 0, (uint)rt.W, (uint)rt.H, PixelFormat.Rgba,
+                              PixelType.UnsignedByte, p);
+        }
+        gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+        PngWriter.WriteRgbaBottomUp(path, pixels, rt.W, rt.H);
     }
 
     public void Dispose()

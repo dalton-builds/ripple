@@ -1,0 +1,97 @@
+{
+  "kind": "ripple-timeline-script",
+  "note": "The 60 s scripted timeline for the Phase 4 budget gate. Regenerate with: node tools/make-timeline.mjs --script tests/fixtures/timeline-budget-60s.script.json --summary",
+
+  "_design_comment": [
+    "DRIVEN HARD ON PURPOSE. A budget test measured over a quiet passage certifies",
+    "nothing: the whole point is the p99, and the 99th percentile frame is a frame where",
+    "everything is firing at once. So the bands sit high, flux and percussivity sit high,",
+    "and the event list stacks onsets, chord changes and novelty pulses on top of each",
+    "other rather than spacing them out politely.",
+    "",
+    "Every field that drives a COST is pushed up rather than centred:",
+    "  bass/sub high      -> feedbackZoom and warpAmount at the top of their mapped range",
+    "  flux/percussivity  -> particle emission and the bolt motif",
+    "  novelty            -> fractalMorph, which raises the fractal iteration count",
+    "  onset              -> the bolt motif, an extra full-screen pass when it fires",
+    "  chromaFlux         -> the rose motif, another full-screen pass",
+    "",
+    "bpmConf is above the 0.35 floor throughout, so the phase-locked path runs rather",
+    "than the cheaper onset fallback.",
+    "",
+    "60 s at 60 fps is 3600 frames, which makes the p99 the 36th worst frame — enough",
+    "samples for the percentile to mean something and short enough to run on a whim."
+  ],
+
+  "seconds": 60,
+  "rate": 60,
+
+  "rhythm": {
+    "bpm": 124,
+    "bpmConf": 0.88,
+    "beatsPerBar": 4,
+    "onset": { "tau": 0.13, "peak": 0.95 }
+  },
+
+  "chroma": {
+    "mode": "triads",
+    "changeEvery": 1.75,
+    "fluxPeak": 0.92,
+    "fluxTau": 0.4,
+    "keyConf": 0.78
+  },
+
+  "baseline": {
+    "rms": { "mean": 0.62, "amp": 0.16, "hz": 0.19 },
+    "peak": { "mean": 0.78, "amp": 0.14, "hz": 0.26 },
+    "loudSlow": 0.58,
+    "dynamics": { "mean": 0.52, "amp": 0.14, "hz": 0.09 },
+
+    "sub": { "mean": 0.62, "amp": 0.22, "hz": 0.11 },
+    "bass": { "mean": 0.71, "amp": 0.24, "hz": 0.29 },
+    "lowMid": { "mean": 0.63, "amp": 0.18, "hz": 0.17 },
+    "mid": { "mean": 0.6, "amp": 0.17, "hz": 0.23 },
+    "hiMid": { "mean": 0.57, "amp": 0.16, "hz": 0.41 },
+    "presence": { "mean": 0.61, "amp": 0.19, "hz": 0.47 },
+    "brilliance": { "mean": 0.56, "amp": 0.17, "hz": 0.57 },
+    "air": { "mean": 0.5, "amp": 0.16, "hz": 0.31 },
+
+    "flux": { "mean": 0.58, "amp": 0.22, "hz": 0.67 },
+    "percussivity": { "mean": 0.72, "amp": 0.18, "hz": 0.13 },
+    "centroid": { "mean": 0.6, "amp": 0.15, "hz": 0.08 },
+    "stereoWidth": { "mean": 0.6, "amp": 0.3, "hz": 0.05 },
+    "paletteMix": 0.5,
+    "keyHue": { "from": 0.0, "to": 1.0 },
+    "era": 2
+  },
+
+  "_events_comment": [
+    "Novelty every 6 s so fractalMorph is exercised ten times over the run, and the",
+    "governor — if it steps at all — has to make that decision more than once. The three",
+    "stacked clusters at 20 s, 40 s and 55 s fire novelty, chromaFlux and onset on the",
+    "same frame: that is the frame the p99 is about."
+  ],
+  "events": [
+    { "field": "novelty", "at": 4.0, "peak": 0.7, "tau": 1.6 },
+    { "field": "novelty", "at": 10.0, "peak": 0.85, "tau": 1.6 },
+    { "field": "novelty", "at": 16.0, "peak": 0.75, "tau": 1.6 },
+
+    { "field": "novelty", "at": 20.0, "peak": 1.0, "tau": 1.6, "note": "stacked cluster 1" },
+    { "field": "chromaFlux", "at": 20.0, "peak": 1.0, "tau": 0.5 },
+    { "field": "onset", "at": 20.0, "peak": 1.0, "tau": 0.2 },
+
+    { "field": "novelty", "at": 26.0, "peak": 0.8, "tau": 1.6 },
+    { "field": "novelty", "at": 32.0, "peak": 0.9, "tau": 1.6 },
+
+    { "field": "novelty", "at": 40.0, "peak": 1.0, "tau": 1.6, "note": "stacked cluster 2" },
+    { "field": "chromaFlux", "at": 40.0, "peak": 1.0, "tau": 0.5 },
+    { "field": "onset", "at": 40.0, "peak": 1.0, "tau": 0.2 },
+
+    { "field": "novelty", "at": 46.0, "peak": 0.85, "tau": 1.6 },
+    { "field": "novelty", "at": 50.0, "peak": 0.8, "tau": 1.6 },
+
+    { "field": "novelty", "at": 55.0, "peak": 1.0, "tau": 1.6, "note": "stacked cluster 3" },
+    { "field": "chromaFlux", "at": 55.0, "peak": 1.0, "tau": 0.5 },
+    { "field": "onset", "at": 55.0, "peak": 1.0, "tau": 0.2 }
+  ]
+}

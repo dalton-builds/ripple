@@ -88,6 +88,27 @@ public sealed class RippleOptions
     /// </summary>
     public bool Trace;
 
+    /// <summary>
+    /// §11's footprint budget as a gate: render the timeline, assert p99 / working set /
+    /// zero Gen0, exit nonzero on failure. See <see cref="Render.BudgetGate"/>.
+    /// </summary>
+    public bool BudgetTest;
+    public double BudgetSeconds = 60;
+
+    /// <summary>
+    /// Override the absolute working-set ceiling, in MB. 0 keeps the plan's 60. Exists so a
+    /// budget the platform cannot meet can be rebased by whoever owns the plan, rather than
+    /// by whoever is closest to the constant.
+    /// </summary>
+    public long BudgetWorkingSetMb;
+
+    /// <summary>
+    /// Long-run soak: render for this many hours, reporting working set periodically, then
+    /// exit. 0 means no soak. The point is drift, not throughput — a leak of 1 MB an hour is
+    /// invisible in a 60 s test and fatal in a work day.
+    /// </summary>
+    public double SoakHours;
+
     /// <summary>Gate mode from tests/parity-config.json, or empty for none.</summary>
     public string ParityMode = "";
     public string ParityConfig = ParityProfile.DefaultPath;
@@ -127,6 +148,25 @@ public sealed class RippleOptions
                 case "--parity-config": o.ParityConfig = Next(a); break;
                 case "--no-particles": o.NoParticles = true; break;
                 case "--trace": o.Trace = true; break;
+                case "--budget-test":
+                    o.BudgetTest = true;
+                    // The timeline drives it, but the gate owns the defaults: vsync would
+                    // cap every frame at the refresh interval and the p99 would measure the
+                    // display rather than the renderer.
+                    o.VSync = false;
+                    break;
+                case "--budget-working-set":
+                    o.BudgetWorkingSetMb = long.Parse(Next(a),
+                        System.Globalization.CultureInfo.InvariantCulture);
+                    break;
+                case "--budget-seconds":
+                    o.BudgetSeconds = double.Parse(Next(a),
+                        System.Globalization.CultureInfo.InvariantCulture);
+                    break;
+                case "--soak":
+                    o.SoakHours = double.Parse(Next(a),
+                        System.Globalization.CultureInfo.InvariantCulture);
+                    break;
                 case "--scale": o.RenderScale = double.Parse(Next(a), System.Globalization.CultureInfo.InvariantCulture); o.ScaleSpecified = true; break;
                 case "--stride": o.Stride = int.Parse(Next(a), System.Globalization.CultureInfo.InvariantCulture); o.StrideSpecified = true; break;
                 case "--dump": o.Dump = true; o.Step = true; break;
@@ -160,6 +200,14 @@ public sealed class RippleOptions
         if (o.Step && string.IsNullOrEmpty(o.Timeline))
             throw new ArgumentException("--step needs --timeline");
 
+        if (o.BudgetTest && string.IsNullOrEmpty(o.Timeline))
+            o.Timeline = "tests/fixtures/timeline-budget-60s.json";
+        if (o.BudgetSeconds <= 0) throw new ArgumentException("--budget-seconds must be positive");
+        if (o.SoakHours < 0) throw new ArgumentException("--soak must not be negative");
+        if (o.BudgetTest && o.SoakHours > 0)
+            throw new ArgumentException("--budget-test and --soak are separate runs: one grades "
+                + "a 60 s window, the other watches for drift over hours");
+
         return o;
     }
 
@@ -178,6 +226,28 @@ public sealed class RippleOptions
           Ripple --dump --timeline <file.json> --out <dir> [--all]
                  [--parity-mode a|b] [--preset <id|index>] [--stride N]
                  [--size 960x540] [--scale 0.75] [--trace]
+
+          Ripple --budget-test [--budget-seconds 60] [--budget-working-set MB]
+          Ripple --soak <hours>
+
+        With no arguments at all, Ripple reads %APPDATA%\Ripple\config.json —
+        creating it with defaults on first run — and drives itself from desktop
+        audio. Nothing below is needed to just run it.
+
+        --budget-test is a GATE, not a report: it replays a 60 s scripted
+        timeline with vsync off and asserts p99 frame time under 16.6 ms, zero
+        Gen0 collections in the window, and the footprint budget. It exits
+        nonzero on failure.
+
+        The absolute working-set budget of 60 MB is not reachable on a .NET plus
+        OpenGL stack — measured floor is 137 MB before the first frame is drawn,
+        against a managed heap under 2 MB. --budget-working-set rebases that
+        ceiling deliberately; the growth assertion is the one that protects an
+        unattended run either way.
+
+        --soak renders for N hours, reporting working set, GC counts and frame
+        time every five minutes. It is looking for drift, which a 60 s test
+        cannot see.
 
         Batch dump renders the whole timeline in exact step mode and writes every
         Nth frame as a PNG, plus a manifest.

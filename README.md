@@ -381,25 +381,89 @@ evidence of anything.
 
 ### What is verified, and what is not
 
-Verified here: 60 DSP tests green, including tempo lock at 60/90/120/132/150/180 BPM, a
-click track drifting ±8% over 60 s tracked within 2 BPM after converging in 0.94 s, the
-`bpmConfidence < 0.35` fallback engaging on 100% of frames of arrhythmic material with
-beat phase anti-correlating at r = −1.000 with the onset envelope, key detection on five
-triads, band isolation at three sample rates, and a real capture replaying in the harness.
+98 tests green. Tempo lock at 60/90/120/132/150/180 BPM; a click track drifting ±8% over
+60 s tracked within 2 BPM after converging in 0.94 s; the `bpmConfidence < 0.35` fallback
+engaging on 100% of frames of arrhythmic material with beat phase anti-correlating at
+r = −1.000 with the onset envelope; key detection on five triads; band isolation at three
+sample rates; a real capture replaying in the harness.
 
-**Not verified: actual Spotify audio, and an actual Dead jam.** This machine had nothing to
-play, so the real-audio path was exercised with a generated WAV through the system mixer —
-genuine WASAPI loopback, genuinely captured, but the material is synthetic. Two things
-therefore remain open, and both need a human with a music library:
+**Cross-host parity, mode A** (2026-08-28, after the Phase 4 composite change): mean
+1.0000, min 0.9998 over 780 frames × 13 presets. Unchanged from the Phase 1 baseline.
 
-1. **Tempo lock on real music.** On dense material with onsets on every half-beat the
-   autocorrelation prefers the subdivision, confidence stays under 0.35, and the visuals run
-   on the onset fallback rather than a beat grid. That may be correct for Drums → Space and
-   wrong for Sugar Magnolia; the click-track tests cannot tell the difference.
-2. **Band ranges on real mixes.** The captured features run high (band means 0.70–0.82),
-   which is above where the presets were authored. `LevelGamma` was fitted against a
-   synthetic signal; refit it against a real capture before deciding the presets need
-   retuning.
+**Budget gate**, 60 s scripted timeline, Release, GL timer queries:
+
+| Assertion | Measured | Budget | |
+|---|---|---|---|
+| p99 frame time | 5.30 ms | 16.6 ms | pass |
+| Gen0 collections in window | 0 over 13 970 frames | 0 | pass |
+| Working-set growth in window | 18.0 MB | 24 MB | pass |
+| Absolute working set | 154.9 MB | 60 MB | **fail** |
+
+The footprint failure is not in the render loop and cannot be fixed there. Working set
+before the first frame is drawn is **137.0 MB** — .NET runtime images, the Intel GL ICD's
+mappings, GLFW and NAudio — against a managed heap of 1.8 MB. §11's 60 MB is not reachable
+on this stack; rebasing it is a decision for the plan owner, so the gate still fails and
+`--budget-working-set N` exists to rebase it deliberately rather than by editing a constant.
+
+**DSP cost with the render loop competing for the core** (Release, live WASAPI loopback on
+dense material): 0.182 ms/hop, **1.70% of one core**, 3184 hops, 0 samples dropped. Phase 2
+reported 1.82% as-scheduled, so adding a render loop did not make it worse. Dominated by
+the FFT (0.058 ms/hop) and tempo (0.035 ms/hop).
+
+#### Closed in Phase 4
+
+**F_FLUX is now §7.2's independent continuous drive.** It measured p50 0.000 / p90 1.000 —
+two spikes and nothing between — and this was confirmed on the committed real-audio fixture,
+so it was never a synthetic-WAV artifact. Two independent causes, both structural:
+
+- the divisor was the onset comparator's own threshold, so the field saturated at 1 on
+  essentially every onset and carried the same information as `F_ONSET`. A clamp against a
+  *threshold* is a decision, not a normalization;
+- raw flux is a half-wave-rectified difference, so on hops where the spectrum is falling it
+  is ~0 — measured 42% of frames below 0.02 on music-like material, 91% on a click track.
+
+Fixed by smoothing (55 ms) and normalizing against the observed range with the clamp applied
+*after* the affine map. Measured on music-like material: p50 0.240, p90 0.624, 0.0% pinned at
+either end, and correlation with `F_ONSET` down from 0.27 to 0.17.
+
+**Octave disambiguation no longer prefers a steady subdivision.** The old div loop was wrong
+twice: its comparison baseline moved inside the loop (0.70 → 0.49 → 0.343, a ratchet toward
+shorter lags), and it could only ever *divide* — fatal when the raw ACF peak is already on
+the subdivision, which is the normal case for dense material. Measured: MusicLike at 88 BPM
+reported 170.18 at confidence 0.88 — high confidence, wrong octave.
+
+A harmonic-sum score alone does not fix it, and the measurement says why: when the
+subdivision carries the strongest periodicity, `acf[lag]` *is* the peak and `acf[2·lag]` is
+necessarily no larger, so every score monotone in the ACF has the subdivision winning by
+construction. What separates them is that beats are louder than the subdivisions between
+them, and the unit-height onset envelope throws that away — so a strength-weighted envelope
+is kept alongside `F_ONSET` and folded at `2·lag` to compare the two interleaved combs.
+88 BPM now reports 85.00 at confidence 0.86; all five click tracks are untouched
+(comb ratio 1.00–1.10, never doubled); arrhythmic material still falls through on 100% of
+frames.
+
+#### Still open
+
+**Not verified: an actual Dead jam.** `tests/fixtures/real/` contains its README and no
+captures — the five the plan designates (`tight-backbeat`, `drifting-jam`, `free-time`,
+`quiet-dynamic`, `modern-loud`) have never been recorded. Three things need them:
+
+1. **The `LevelGamma` refit.** Real bands still run high. Against the synthetic driver on
+   music-like material the median deltas are +0.04 (sub) to +0.41 (air) — band-dependent,
+   so a single scalar gamma cannot correct all eight. Refitting against `MusicLike` would be
+   fitting to a synthetic proxy, which is the exact error the fixture set exists to prevent,
+   so `LevelGamma` is deliberately unchanged at 4.66. `tools/timeline-stats.mjs --gamma N`
+   already previews a refit; it needs recordings, not more tooling.
+2. **Confirming the octave fix on real material.** `CombAlternation = 1.35` is fitted to
+   synthetic signals. `tight-backbeat` is the plan's designated unambiguous diagnostic and
+   the threshold should be re-fitted against it.
+3. **F_ONSET saturating on dense material.** Not asked for and not changed, but measured and
+   worth knowing: mean 0.762, p50 0.808 on `MusicLike`, and 0.840 on the real fixture. The
+   peak-detection guard fixed sparse material and not dense — with a 50 ms refractory and a
+   150 ms decay, re-triggering floors the impulse near 0.72. `HostState.AdvanceMotifs` gates
+   bolts on `onset > 0.82`, so on dense material bolts fire at the cooldown limit rather than
+   on transients. Changing it moves every motif and the parity fixtures, which is visual
+   tuning and gated behind the levels work.
 
 ---
 

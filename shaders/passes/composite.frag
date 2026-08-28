@@ -13,6 +13,12 @@ uniform float uVignette;
 uniform float uSaturate;  // additive accumulation greys out; this pays it back
 uniform float uIdle;      // 1 = live, 0.3 = idle dim (plan 11)
 
+// Master intensity (plan 12), hotkey-adjustable, 0.05..1.0. Applied BEFORE
+// rippleSafety so the limiter still sees and clamps the final picture: an
+// intensity applied after the clamp would be a route around the ceiling, and
+// this control sits INSIDE the safety envelope rather than beside it.
+uniform float uIntensity;
+
 in vec2 vUv;
 out vec4 fragColor;
 
@@ -35,6 +41,8 @@ void main() {
     vec2 q = vUv - 0.5;
     q.x *= F_ASPECT;
     c *= 1.0 - uVignette * smoothstep(0.26, 0.88, length(q));
+
+    c *= clamp(uIntensity, 0.0, 1.0);
 
     fragColor = vec4(rippleSafety(c), 1.0);
 }

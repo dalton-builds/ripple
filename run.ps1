@@ -31,9 +31,14 @@ Set-StrictMode -Version Latest
 $dotnet = Resolve-RippleDotnet
 
 $cliArgs = @('run', '--project', "$PSScriptRoot\src\Ripple\Ripple.csproj", '-c', $Configuration, '--nologo')
-if ($NoBuild) { $args += '--no-build' }
+
+# These three lines appended to $args, PowerShell's AUTOMATIC argument variable, rather than
+# to $cliArgs. Under Set-StrictMode that silently built a throwaway array: -NoBuild did
+# nothing, and the `--` separator never reached the muxer, so app arguments were handed to
+# the SDK. `.\run.ps1 --budget-test` failed with an unrecognised-command error from dotnet.
+if ($NoBuild) { $cliArgs += '--no-build' }
 # Everything past `--` is the app's, not the SDK's.
-$args += '--'
+$cliArgs += '--'
 if ($AppArgs) { $cliArgs += $AppArgs }
 
 & $dotnet @cliArgs

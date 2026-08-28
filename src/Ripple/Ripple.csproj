@@ -47,6 +47,10 @@
     <PackageReference Include="Silk.NET.Windowing" Version="*" />
     <PackageReference Include="Silk.NET.OpenGL" Version="*" />
     <PackageReference Include="Silk.NET.Input" Version="*" />
+    <!-- Silk.NET.Windowing has no blocking event wait (DoEvents is glfwPollEvents).
+         The idle path needs glfwWaitEventsTimeout so a hidden window BLOCKS instead
+         of polling; see GlHost.WaitForEvents and plan 11. -->
+    <PackageReference Include="Silk.NET.GLFW" Version="*" />
     <PackageReference Include="NAudio" Version="*" />
 
     <!-- Optional convenience wrapper over SMTC. Try the raw

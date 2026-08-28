@@ -25,6 +25,16 @@ public sealed class HostState
 
     // --- safety limiter (plan §12) ----------------------------------------
     public double SafeMean, SafePrev, SafeScale = 1, SafeLastD, FlashRate;
+
+    /// <summary>
+    /// §11's idle dim (1.0 live, 0.30 quiet) and §12's master intensity.
+    ///
+    /// Both multiply the composite, and both live here rather than in DrawState because
+    /// neither is authored: a preset cannot set them, which is what makes master intensity a
+    /// safety control rather than a look control. Intensity is clamped to 1.0 by everything
+    /// that writes it — it takes brightness away and never adds any.
+    /// </summary>
+    public double IdleDim = 1.0, MasterIntensity = 1.0;
     private readonly List<double> _zeroCrossings = [];
     private readonly byte[] _pixel = new byte[4];
 
@@ -46,6 +56,8 @@ public sealed class HostState
         SafeScale = 1;
         SafeLastD = 0;
         FlashRate = 0;
+        IdleDim = 1.0;
+        MasterIntensity = 1.0;
         _zeroCrossings.Clear();
     }
 
