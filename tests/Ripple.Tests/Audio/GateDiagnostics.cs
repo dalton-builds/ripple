@@ -107,4 +107,44 @@ public sealed class GateDiagnostics(ITestOutputHelper log)
         }
         return sab / Math.Sqrt(Math.Max(saa * sbb, 1e-18));
     }
+
+    /// <summary>
+    /// Is the onset envelope saturated because the material is dense, or because the
+    /// detector is retriggering? The envelope alone cannot tell you; the RATE can.
+    ///
+    /// MusicLike's real onset content is a kick and bass on the beat, hats on the half beat
+    /// and a chord strike every half bar — about 4-5 events a second at 108 BPM. A measured
+    /// rate several times that is the detector firing on the shoulders of its own peaks.
+    /// </summary>
+    [Fact]
+    public void Onset_rate_against_the_material_it_is_measuring()
+    {
+        log.WriteLine($"{"signal",-26} {"onset/s",8} {"expected",9} {"p50",7} {"mean",7} "
+            + $"{"frac>.82",9}");
+        log.WriteLine(new string('-', 72));
+
+        void Row(string name, float[] mono, double seconds, double expectedPerSec)
+        {
+            var a = Make();
+            var onset = new List<double>();
+            SignalGen.Drive(a, SignalGen.ToStereo(mono), (fr, i) =>
+            {
+                if (i / FrameRate < 2.0) return;
+                onset.Add(fr.AsSpan()[FF.Onset]);
+            });
+            double graded = seconds - 2.0;
+            // 0.82 is the gate HostState.AdvanceMotifs uses for the bolt motif, so the
+            // fraction above it is literally "how often is the motif layer armed".
+            double armed = onset.Count(v => v > 0.82) / (double)onset.Count;
+            log.WriteLine($"{name,-26} {a.OnsetCount / graded,8:F1} {expectedPerSec,9:F1} "
+                + $"{SignalGen.Percentile(onset, 0.50),7:F3} {onset.Average(),7:F3} {armed,9:F3}");
+        }
+
+        // 108 BPM: 1.8 beats/s -> kick+bass 1.8, hats 3.6, chord strikes 0.9.
+        Row("musicLike 108", SignalGen.MusicLike(24.0), 24.0, 4.5);
+        Row("musicLike 80", SignalGen.MusicLike(24.0, 80), 24.0, 3.3);
+        Row("click 120", SignalGen.ClickTrack(20.0, 120), 20.0, 2.0);
+        Row("arrhythmic", SignalGen.ArrhythmicClicks(20.0), 20.0, 2.0);
+        Row("sustained pad", SignalGen.Sine(20.0, 220), 20.0, 0.0);
+    }
 }

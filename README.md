@@ -109,11 +109,16 @@ All four hot-reload from disk at runtime. Tune them without rebuilding.
 - [x] **0** — WebGL2 harness, 5 presets authored, shaders extracted, timeline recorder working
 - [x] **1** — Native shell renders all 13 presets; cross-host parity gate passes (mean SSIM
   1.0000, min 0.9998 over 780 frames x 13 presets). See "Cross-host parity gate" below.
-- [x] **2** — WASAPI loopback + full DSP; real audio drives the visuals, 60 DSP tests
-  green, and a captured real-audio timeline replays in the harness. See "Audio and DSP".
+- [ ] **2** — WASAPI loopback + full DSP. **Gate is 3 of 4.** Flux and onset closed against
+  measurement; parity re-run green; levels and the tempo octave both blocked on real
+  captures that do not exist yet. See "What is verified, and what is not".
 - [ ] **3** — SMTC metadata, era mapping, song modes, now-playing caption
-- [ ] **4** — Governor, idle states, safety limiter, budget test green
-- [ ] **5** — Tray, hotkeys, config, packaging, full preset library
+- [x] **4** — Governor control loop, idle states, safety limiter with master intensity,
+  budget gate green (p99 5.30 ms, zero Gen0). Soak started but never ran a full 8 hours.
+- [~] **5** — Desk-prototype slice done and tagged `prototype-v1`: borderless window with
+  remembered geometry, always-on-top, fullscreen per monitor, global hotkeys, tray icon,
+  hot-reloaded config, graceful fractal fallback. Packaging and the full preset library
+  are still open.
 
 Do not proceed past a failed gate. Gate 1 (cross-host parity) validates the entire
 shared-shader architecture; if it fails, fix the contract rather than forking the shaders.
@@ -357,6 +362,43 @@ Watch for one trap if you change `TempoEvery`: the BPM median is sized by how of
 estimate is *produced*, not in hops. Sizing it in hops silently turned a 2 s median into an
 8 s one and put the drift-tracking error back over budget.
 
+Re-measured in Phase 4 with the app **actually rendering** and competing for the core:
+**0.182 ms/hop, 1.70% of one core**, 3184 hops, 0 samples dropped. Adding a render loop did
+not make it worse than the 1.82% figure above.
+
+### Where §11's footprint budget departs from the plan, and why
+
+Same rule as the DSP table: the number moved because a measurement said so, and the
+measurement is here. This is the one plan figure Phase 4 retired.
+
+| §11 says | Graded as | Because |
+|---|---|---|
+| **working set** under **60 MB** | **private bytes** under **128 MB** | Both halves were wrong, for two independent reasons. |
+
+**60 MB is unreachable, and not because of the render loop.** Working set before a single
+frame is drawn measured **137.0 MB** on Intel UHD / OpenGL 4.3 — .NET runtime images, the GL
+ICD's mappings, GLFW and NAudio — against a managed heap of **1.8 MB** and 18 MB of growth
+across a whole 60 s run. There is no change to the frame loop that moves a floor the frame
+loop does not set. Nothing was optimized to meet this; nothing could be.
+
+**Working set is the wrong metric anyway.** It is elastic: Windows trims and regrows it
+against whole-machine pressure, so it is not a property of this process. Sampled over three
+minutes of an idle soak it wandered **218 → 205 → 179 → 172 MB** — a 46 MB swing — while
+private bytes sat at 117 MB and the handle count did not move. Graded on working set that
+run "leaked 46 MB and gave it back"; graded on private bytes it was flat. A metric that
+reports a leak where there is none cannot also report a leak where there is one.
+
+So 128 MB is the settled private-bytes steady state (~117 MB) with headroom, and it is not a
+number picked to make the gate green — the gate now grades two things the old one could not:
+
+- **private bytes < 128 MB**, absolute;
+- **drift < 5 MB over 8 hours**, from a baseline latched at 20 minutes.
+
+The 20-minute latch is itself measured. The GL driver allocates lazily well past startup —
+an 11 MB step at 5 min and a further 27 MB at 15 min, then flat — and counting that as drift
+would fail every run for a reason unrelated to a leak. `--budget-private MB` rebases the
+ceiling from the command line rather than by editing a constant.
+
 ### Where the DSP departs from §7, and why
 
 Every one of these came out of a measurement, and the measurement is in the code comment
@@ -372,6 +414,8 @@ next to it:
 | bands normalized to 0..1 | Same window, plus a fitted `v^4.66` calibration and a relative gate | Two structural problems. §7.1's envelope is a peak follower, so on dense material it sits at the top of its own window and every field read ~0.4 high — presets authored in the harness would be driven flat out. And the per-band normalizer amplifies its own noise floor: a pure 1550 Hz tone lit all eight bands to 0.93 until a gate, relative to the loudest band, suppressed the ones carrying only leakage. |
 | `dynamics = peak - rms` | Crest factor in dB, normalized separately | Both inputs are already normalized against their own ranges, so on steady material both sit near the top and the difference is ~0 regardless of how peaky the audio is. |
 | novelty = cosine distance | × 2.5 | Cosine distance between two non-negative 8-vectors is confined to a small part of 0..1; a hard cut measured 0.4 and steady material under 0.09, while presets route novelty expecting the full range. |
+| `flux` normalized against its own range | 55 ms envelope, then an adaptive window whose hi/lo track the **envelope** and not the raw input, clamp applied last | Two structural faults, and the field measured p50 0.000 / p90 1.000 on real audio — two spikes, nothing between. The divisor was the onset comparator's own threshold, so it saturated on every onset and duplicated `F_ONSET`; and raw flux is half-wave rectified, so it is ~0 wherever the spectrum falls (42% of frames on dense material, 91% on a click track). Tracking the window on the raw extremes while the numerator is smoothed then capped it at p90 0.229. |
+| 50 ms onset refractory alone | Refractory **plus** a post-onset bar at 3.5× the firing peak, decaying at 130 ms | The refractory is four times shorter than the 150 ms envelope decay, so a detection on the shoulder of a peak re-armed the impulse before it had fallen. Measured 13.5 onsets/s against 3.6 genuine event times, holding `F_ONSET` at mean 0.762 — and `AdvanceMotifs` gates bolts on `onset > 0.82`, so the gate was armed on 40% of frames and motifs fired on their cooldown. A multiplier **below** 1 cannot fix this: if the bar starts under the peak that armed it, an equal peak one hop later already clears it. Above 1 the minimum spacing becomes `tau·ln(mult)` = 163 ms, while a genuinely stronger hit still breaks through. |
 
 `NormalizationTests` is the guard on the last three. Its real assertion is the **aggregate**:
 a systematic scaling error moves every field the same way, and that is the failure that
@@ -379,93 +423,161 @@ makes all 13 presets look wrong at once. Per-field tolerances are deliberately l
 because a per-field difference between a synthetic audio signal and a slider default is not
 evidence of anything.
 
+
 ### What is verified, and what is not
 
-98 tests green. Tempo lock at 60/90/120/132/150/180 BPM; a click track drifting ±8% over
-60 s tracked within 2 BPM after converging in 0.94 s; the `bpmConfidence < 0.35` fallback
-engaging on 100% of frames of arrhythmic material with beat phase anti-correlating at
-r = −1.000 with the onset envelope; key detection on five triads; band isolation at three
-sample rates; a real capture replaying in the harness.
+**The Phase 2 gate is 3 of 4.** Tempo is the open item, and it is open for a specific,
+recorded reason — see "Still open". This phase is not complete and is not tagged as such.
 
-**Cross-host parity, mode A** (2026-08-28, after the Phase 4 composite change): mean
-1.0000, min 0.9998 over 780 frames × 13 presets. Unchanged from the Phase 1 baseline.
+101 tests green, 1 skipped and documented. Tempo lock at 60/90/120/132/150/180 BPM; a click
+track drifting ±8% over 60 s tracked within 2 BPM after converging in 0.94 s; the
+`bpmConfidence < 0.35` fallback engaging on 100% of frames of arrhythmic material with beat
+phase anti-correlating at r = −1.000 with the onset envelope; key detection on five triads;
+band isolation at three sample rates; a real capture replaying in the harness.
+
+**Cross-host parity, mode A** — 2026-08-31, after the flux, octave, onset and composite
+changes, across all three committed timelines:
+
+| Timeline | Frames | Mean | Min | |
+|---|---|---|---|---|
+| `timeline-20s` | 780 | 1.0000 | 0.9998 | pass |
+| `timeline-novelty` | 780 | 1.0000 | 0.9995 | pass |
+| `timeline-real-20s` | 1222 | 0.9999 | 0.9977 | pass |
+
+`timeline-real-20s` was **regenerated** after the onset fix, because its F_ONSET column was
+recorded by the old detector and no longer represented what the DSP produces. Its min is the
+lowest of the three at 0.9977, which is expected: it is the only timeline whose features are
+real rather than authored, so it drives the mapping ranges hardest.
 
 **Budget gate**, 60 s scripted timeline, Release, GL timer queries:
 
 | Assertion | Measured | Budget | |
 |---|---|---|---|
-| p99 frame time | 5.30 ms | 16.6 ms | pass |
-| Gen0 collections in window | 0 over 13 970 frames | 0 | pass |
-| Working-set growth in window | 18.0 MB | 24 MB | pass |
-| Absolute working set | 154.9 MB | 60 MB | **fail** |
+| p99 frame time | 5.11 ms | 16.6 ms | pass |
+| Gen0 collections in window | 0 over 15 920 frames | 0 | pass |
+| Private bytes | 91.9 MB | 128 MB | pass |
+| Private-bytes growth in window | 13.4 MB | 24 MB | pass |
 
-The footprint failure is not in the render loop and cannot be fixed there. Working set
-before the first frame is drawn is **137.0 MB** — .NET runtime images, the Intel GL ICD's
-mappings, GLFW and NAudio — against a managed heap of 1.8 MB. §11's 60 MB is not reachable
-on this stack; rebasing it is a decision for the plan owner, so the gate still fails and
-`--budget-working-set N` exists to rebase it deliberately rather than by editing a constant.
+(p50 2.89 ms, max 28.86 ms. The max is a single outlier, which is why the gate grades a p99
+and not a maximum. Working set, reported but ungraded: 154.9 MB against a 137.3 MB pre-loop
+floor.)
+
+The ceiling is graded on private bytes rather than working set, and the plan's 60 MB figure
+was retired against measurement — see "Where §11's footprint budget departs from the plan".
+Managed heap is 1.8 MB: the renderer is not what spends the footprint.
 
 **DSP cost with the render loop competing for the core** (Release, live WASAPI loopback on
 dense material): 0.182 ms/hop, **1.70% of one core**, 3184 hops, 0 samples dropped. Phase 2
-reported 1.82% as-scheduled, so adding a render loop did not make it worse. Dominated by
-the FFT (0.058 ms/hop) and tempo (0.035 ms/hop).
+reported 1.82% as-scheduled, so adding a render loop did not make it worse.
 
-#### Closed in Phase 4
+#### Closed
 
-**F_FLUX is now §7.2's independent continuous drive.** It measured p50 0.000 / p90 1.000 —
-two spikes and nothing between — and this was confirmed on the committed real-audio fixture,
-so it was never a synthetic-WAV artifact. Two independent causes, both structural:
+**F_FLUX is §7.2's independent continuous drive.** It measured p50 0.000 / p90 1.000 — two
+spikes and nothing between — on the real-audio fixture as well as on synthetic input, so it
+was never a WAV artifact. Two structural causes: the divisor was the onset comparator's own
+threshold, so the field saturated on essentially every onset and duplicated `F_ONSET`; and
+raw flux is half-wave rectified, so it is ~0 wherever the spectrum falls (42% of frames on
+dense material, 91% on a click track).
 
-- the divisor was the onset comparator's own threshold, so the field saturated at 1 on
-  essentially every onset and carried the same information as `F_ONSET`. A clamp against a
-  *threshold* is a decision, not a normalization;
-- raw flux is a half-wave-rectified difference, so on hops where the spectrum is falling it
-  is ~0 — measured 42% of frames below 0.02 on music-like material, 91% on a click track.
+Fixed by smoothing, then normalizing against the observed range with the clamp applied
+*after* the affine map, and by tracking the adaptive window on the envelope rather than on the
+raw extremes. Confirmed on the **real-audio path**, not only synthetically — the regenerated
+capture reads p10 0.013 / p50 0.135 / p90 0.536 where it used to read 0.000 / 0.000 / 1.000.
 
-Fixed by smoothing (55 ms) and normalizing against the observed range with the clamp applied
-*after* the affine map. Measured on music-like material: p50 0.240, p90 0.624, 0.0% pinned at
-either end, and correlation with `F_ONSET` down from 0.27 to 0.17.
+**F_ONSET fires at the rate the material has.** The 50 ms refractory is four times shorter
+than the 150 ms envelope decay, so a detection on the shoulder of a peak re-armed the impulse
+before it had fallen anywhere:
 
-**Octave disambiguation no longer prefers a steady subdivision.** The old div loop was wrong
-twice: its comparison baseline moved inside the loop (0.70 → 0.49 → 0.343, a ratchet toward
-shorter lags), and it could only ever *divide* — fatal when the raw ACF peak is already on
-the subdivision, which is the normal case for dense material. Measured: MusicLike at 88 BPM
-reported 170.18 at confidence 0.88 — high confidence, wrong octave.
+| | before | after | material has |
+|---|---|---|---|
+| onsets/s, dense (108 BPM) | 13.5 | **4.1** | ~3.6 |
+| onsets/s, dense (80 BPM) | 14.3 | **3.4** | ~2.7 |
+| onsets/s, click track | 2.9 | 2.2 | 2.0 |
+| `F_ONSET` mean | 0.762 | **0.477** | |
+| bolt gate (`onset > 0.82`) armed | 40.4% of frames | **11.9%** | |
 
-A harmonic-sum score alone does not fix it, and the measurement says why: when the
-subdivision carries the strongest periodicity, `acf[lag]` *is* the peak and `acf[2·lag]` is
-necessarily no larger, so every score monotone in the ACF has the subdivision winning by
-construction. What separates them is that beats are louder than the subdivisions between
-them, and the unit-height onset envelope throws that away — so a strength-weighted envelope
-is kept alongside `F_ONSET` and folded at `2·lag` to compare the two interleaved combs.
-88 BPM now reports 85.00 at confidence 0.86; all five click tracks are untouched
-(comb ratio 1.00–1.10, never doubled); arrhythmic material still falls through on 100% of
-frames.
+Sparse material was always correct, which is exactly why the earlier falling-edge guard looked
+sufficient. Confirmed on the real-audio path as well: the regenerated capture reads onset
+p50 0.457 / mean 0.497 against 0.867 / 0.840 before.
+
+The fix is a post-onset bar at **3.5× the firing peak**, decaying at 130 ms. A multiplier
+*below* 1 cannot work — if the bar starts under the peak that armed it, an equal peak one hop
+later already clears it, and 0.72 was measured to take 13.5/s only down to 10.6/s. Above 1,
+the minimum spacing between equal peaks becomes `tau·ln(mult)` = 163 ms, while a genuinely
+stronger hit still breaks through sooner.
 
 #### Still open
 
-**Not verified: an actual Dead jam.** `tests/fixtures/real/` contains its README and no
-captures — the five the plan designates (`tight-backbeat`, `drifting-jam`, `free-time`,
-`quiet-dynamic`, `modern-loud`) have never been recorded. Three things need them:
+**No real captures exist.** `tests/fixtures/real/` contains its README and nothing else. The
+five the plan designates — `tight-backbeat`, `drifting-jam`, `free-time`, `quiet-dynamic`,
+`modern-loud` — have never been recorded, and four things are blocked on them.
 
-1. **The `LevelGamma` refit.** Real bands still run high. Against the synthetic driver on
-   music-like material the median deltas are +0.04 (sub) to +0.41 (air) — band-dependent,
-   so a single scalar gamma cannot correct all eight. Refitting against `MusicLike` would be
-   fitting to a synthetic proxy, which is the exact error the fixture set exists to prevent,
-   so `LevelGamma` is deliberately unchanged at 4.66. `tools/timeline-stats.mjs --gamma N`
-   already previews a refit; it needs recordings, not more tooling.
-2. **Confirming the octave fix on real material.** `CombAlternation = 1.35` is fitted to
-   synthetic signals. `tight-backbeat` is the plan's designated unambiguous diagnostic and
-   the threshold should be re-fitted against it.
-3. **F_ONSET saturating on dense material.** Not asked for and not changed, but measured and
-   worth knowing: mean 0.762, p50 0.808 on `MusicLike`, and 0.840 on the real fixture. The
-   peak-detection guard fixed sparse material and not dense — with a 50 ms refractory and a
-   150 ms decay, re-triggering floors the impulse near 0.72. `HostState.AdvanceMotifs` gates
-   bolts on `onset > 0.82`, so on dense material bolts fire at the cooldown limit rather than
-   on transients. Changing it moves every motif and the parity fixtures, which is visual
-   tuning and gated behind the levels work.
+**1. Tempo octave on dense material — and the Phase 4 "fix" was not real.**
 
----
+Fixing `F_ONSET` exposed this. The comb discriminator was working *because* the onset envelope
+was saturated: a detector firing 13.5 times a second produced a dense envelope whose
+interleaved combs had plenty of content to compare. A correct detector fires 4.1 times a
+second, and the on-beat and off-beat spectral rises then come out within 2% of each other.
+
+| | before onset fix | after |
+|---|---|---|
+| MusicLike 88 BPM | 85.00 @ conf 0.86 | **176.67 @ conf 0.88** |
+| MusicLike 80 BPM | 85.24 @ conf 0.49 | **158.42 @ conf 0.89** |
+| MusicLike 108 BPM (control) | 107.70 @ conf 0.08 | 108.17 @ conf 0.47 |
+| click 60/90/120/150/180 | all lock | all lock, unchanged |
+
+Both dense cases now report the subdivision *and are confident about it*, which is the state
+that matters: a wrong octave below the 0.35 floor costs nothing, because nothing downstream
+uses the grid.
+
+`CombDoublingEnabled` is therefore **false**. The instrument still runs every hop and
+`CombRatio` is still exposed, but it no longer moves the octave. Leaving it active was worse
+than useless — it fired spuriously mid-run on §14's drifting-click-track case, a **64.3 BPM
+excursion at 52.4 s** against a ±2 BPM requirement, on material that has been correct for the
+whole project. Fixed-tempo click tracks were unaffected, which is why only the drift test
+surfaced it.
+
+Three re-calibrations were tried and measured, and all were worse. Weighting onset strength by
+the kick band (20–150 Hz) — the beat is where the kick is — broke tempi that had never been
+wrong, because a click track's lowpassed noise bursts vary randomly in the low band and the
+comb read that as alternation: 120 BPM halved to 60.00, 150 BPM to 74.01. Raising the gate
+multiplier moved the onset rate without moving the comb at all. And the 80-versus-88 split
+does not look like a property of the DSP: comb 1.57 versus 1.00 on the same construction,
+which points at where `MusicLike`'s half-bar chord strikes and four-bar crash happen to land
+inside a 4 s window.
+
+That is the argument for stopping rather than iterating. This is the third time a number
+fitted against `MusicLike` has not meant what it appeared to, and the plan already names the
+instrument that settles it: `tight-backbeat`, unambiguous by construction.
+
+**2. The `LevelGamma` refit — and a scalar gamma probably cannot do it.**
+
+Real bands still run high: on the regenerated real capture, `lowMid` p50 0.909, `bass` 0.821,
+`mid` 0.839, against synthetic-driver medians of 0.21–0.46. But the deltas are strongly
+**band-dependent** — about +0.04 at `sub` rising to +0.41 at `air` — and one exponent applied
+to all eight cannot flatten a spread that wide. Forcing a scalar fit would land the middle
+bands and leave `sub` under-corrected and `air` over-corrected.
+
+The proposal, for when the captures exist: replace the scalar with **eight fitted exponents**,
+one per band, `v^gamma[b]`. It keeps every property the current curve has — monotonic, 0→0,
+1→1, no change to ordering or to band isolation — and it is the same one-line change at the
+call site, because `Calibrate` is already applied per band. Fit each `gamma[b]` as
+`ln(synthetic_median[b]) / ln(real_median[b])` over the capture set, then judge the result on
+the aggregate in `NormalizationTests` rather than on the per-field tolerances, which are
+deliberately loose. `LevelGamma` stays at 4.66 until then; refitting it against `MusicLike` is
+precisely the error the fixture set exists to prevent.
+
+**3. Preset retuning.** Blocked on 2, by design. All 13 presets were authored against the
+synthetic driver's ranges and none has been touched. If `LevelGamma` becomes eight exponents,
+every band-driven mapping shifts underneath them, and retuning first is work that has to be
+redone. The feature recorder and harness replay exist for exactly this and are ready.
+
+**4. The 8-hour soak has not completed.** Started twice; the machine went idle both times. The
+longest clean run is **30 minutes**, and it is encouraging rather than conclusive: private
+bytes stepped 78.0 → 89.4 MB at 5 min and → 116.8 MB at 15 min, then sat at 116.9 / 117.0 /
+117.2 over the next three reports. Handles flat at ~502. **Gen0 = 1 for the whole run.** That
+step pattern is the GL driver allocating lazily, and it is why the drift verdict is graded
+from a baseline latched at 20 minutes rather than from process start.
 
 ## Non-negotiables
 

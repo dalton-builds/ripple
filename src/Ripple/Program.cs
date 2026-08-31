@@ -57,9 +57,9 @@ internal static class Program
         {
             using var host = new GlHost(opt);
             host.Run();
-            // The budget test is a GATE, so its verdict has to reach the shell. Everything
-            // else exits 0 on a clean run.
-            return host.BudgetFailed ? 1 : 0;
+            // Both measurement runs are GATES, so their verdicts have to reach the shell.
+            // Everything else exits 0 on a clean run.
+            return host.BudgetFailed || host.SoakFailed ? 1 : 0;
         }
         catch (Exception ex)
         {

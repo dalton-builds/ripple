@@ -57,8 +57,8 @@ public sealed partial class GlHost
 
         if (_opt.BudgetTest)
         {
-            _budget = _opt.BudgetWorkingSetMb > 0
-                ? new BudgetGate(_opt.BudgetWorkingSetMb * 1024 * 1024)
+            _budget = _opt.BudgetPrivateMb > 0
+                ? new BudgetGate(_opt.BudgetPrivateMb * 1024 * 1024)
                 : new BudgetGate();
             Console.WriteLine($"[budget] {_opt.BudgetSeconds:0.#}s at "
                 + $"{_opt.Width}x{_opt.Height} @ {_renderScale:0.##}x, "
@@ -91,7 +91,7 @@ public sealed partial class GlHost
 
             var result = _budget.Evaluate();
             BudgetGate.Report(result, _gpuTimer?.Available == true,
-                _budget.StartupWorkingSet, Console.Out);
+                _budget.StartupWorkingSet, _budget.StartupPrivateBytes, Console.Out);
             BudgetFailed = !result.Pass;
             return true;
         }
@@ -104,7 +104,7 @@ public sealed partial class GlHost
                 _lastSoakReport = elapsed;
                 ReportSoak();
             }
-            if (elapsed >= _opt.SoakHours * 3600) { ReportSoak(force: true); return true; }
+            if (elapsed >= _opt.SoakHours * 3600) { ReportSoak(force: true); ReportSoakVerdict(); return true; }
         }
 
         return false;
@@ -148,6 +148,9 @@ public sealed partial class GlHost
 
         if (_soakBaselinePrivate == 0) _soakBaselinePrivate = priv;
 
+        // Latch the settled baseline once, at the first report past the settling window.
+        if (_soakSettledPrivate == 0 && elapsed >= SoakSettleSeconds) _soakSettledPrivate = priv;
+
         double p50 = 0;
         if (_soakFrameMs.Count > 0)
         {
@@ -168,6 +171,55 @@ public sealed partial class GlHost
             + $"{p50,8:F2} {_governor.Level,5}"
             + $"   {(priv - _soakBaselinePrivate) / (1024.0 * 1024):+0.0;-0.0} MB private drift");
     }
+
+    /// <summary>
+    /// The soak's pass/fail, printed once at the end.
+    ///
+    /// Graded from the SETTLED baseline, not from process start. The GL driver allocates
+    /// lazily for the first ten minutes or so — measured an 11 MB step at 5 min and a further
+    /// 27 MB step at 15 min before flattening — and counting that as drift would fail every
+    /// run for a reason that has nothing to do with an 8-hour leak. So the baseline is taken
+    /// after the settling window and the requirement applies from there.
+    /// </summary>
+    private void ReportSoakVerdict()
+    {
+        long priv = 0;
+        try { _self.Refresh(); priv = _self.PrivateMemorySize64; }
+        catch (Exception) { }
+
+        double hours = Stopwatch.GetElapsedTime(_runStartTicks).TotalHours;
+        long drift = priv - (_soakSettledPrivate != 0 ? _soakSettledPrivate : _soakBaselinePrivate);
+        bool pass = _soakSettledPrivate != 0
+                 && Math.Abs(drift) < BudgetGate.SoakDriftBudgetBytes
+                 && GC.CollectionCount(0) <= 8;
+
+        Console.WriteLine();
+        Console.WriteLine($"  soak — {hours:F2} h");
+        Console.WriteLine("  " + new string('-', 58));
+        Console.WriteLine($"  {"settled baseline",-24} "
+            + $"{_soakSettledPrivate / (1024.0 * 1024),10:F1} MB   (at {SoakSettleSeconds / 60:F0} min)");
+        Console.WriteLine($"  {"private bytes now",-24} {priv / (1024.0 * 1024),10:F1} MB   "
+            + $"budget {BudgetGate.PrivateBytesBudget / (1024 * 1024)}");
+        Console.WriteLine($"  {"drift since settling",-24} {drift / (1024.0 * 1024),10:F1} MB   "
+            + $"budget {BudgetGate.SoakDriftBudgetBytes / (1024 * 1024)}");
+        Console.WriteLine($"  {"handles",-24} {_self.HandleCount,10}");
+        Console.WriteLine($"  {"Gen0 / Gen2",-24} {GC.CollectionCount(0),5} "
+            + $"{GC.CollectionCount(2),4}");
+        Console.WriteLine("  " + new string('-', 58));
+        Console.WriteLine(pass ? "  SOAK PASS" : "  SOAK FAIL");
+        if (!pass) SoakFailed = true;
+    }
+
+    /// <summary>Set when the soak's drift verdict failed, so Program can exit nonzero.</summary>
+    public bool SoakFailed { get; private set; }
+
+    /// <summary>
+    /// How long the GL driver is allowed to finish allocating before drift is graded.
+    /// Measured: flat from about 15 minutes on.
+    /// </summary>
+    private const double SoakSettleSeconds = 1200;
+
+    private long _soakSettledPrivate;
 
     private Silk.NET.GLFW.Glfw? _glfw;
 

@@ -330,7 +330,7 @@ public sealed class DeskLayerTests(ITestOutputHelper log)
     [Fact]
     public void Budget_gate_fails_a_slow_p99()
     {
-        var gate = new BudgetGate(workingSetBudgetBytes: long.MaxValue);
+        var gate = new BudgetGate(privateBytesBudget: long.MaxValue);
         for (int i = 0; i < BudgetGate.WarmupFrames; i++) gate.Sample(1.0);
         // 98% fast, 2% very slow: the mean would pass and the p99 must not.
         for (int i = 0; i < 1000; i++) gate.Sample(i % 50 == 0 ? 40.0 : 2.0);

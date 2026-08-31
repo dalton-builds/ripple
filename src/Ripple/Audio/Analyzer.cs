@@ -55,6 +55,38 @@ public sealed class Analyzer
     private const double OnsetDecay = 0.150;
 
     /// <summary>
+    /// After an onset fires, the bar for the NEXT one is raised to a fraction of the flux
+    /// peak that fired it, and decays back to the ordinary threshold with this time constant.
+    ///
+    /// WHY IT IS NEEDED. The 50 ms refractory is four times shorter than the 150 ms envelope
+    /// decay, so a second detection 50-80 ms later re-arms the impulse before it has fallen
+    /// anywhere. On dense material the flux peak has shoulders that clear the median-based
+    /// threshold, and the detector walks up them: measured 13.5 onsets/s on MusicLike at 108
+    /// BPM against 3.6 genuine event times — 3.75 detections per event — which held F_ONSET
+    /// at mean 0.762 and left the bolt motif's `onset > 0.82` gate armed on 40% of frames.
+    /// Motifs then fired on their own cooldown rather than on transients. Sparse material was
+    /// never affected (click track 2.9/s against 2.0 expected), which is why the earlier
+    /// falling-edge guard looked like it had fixed this.
+    ///
+    /// THE MULTIPLIER IS ABOVE 1 ON PURPOSE, and that is the whole trick. A gate set to some
+    /// FRACTION of the previous peak cannot enforce any spacing at all between peaks of equal
+    /// height: if the bar starts below the peak that armed it, an identical peak one hop later
+    /// already clears it, and the only thing left limiting the rate is the refractory. Tried
+    /// at 0.72 and measured — 13.5 onsets/s fell only to 10.6, still three times the real
+    /// event rate.
+    ///
+    /// Set above 1, the bar starts ABOVE the peak that armed it and the minimum spacing
+    /// between equal peaks becomes tau * ln(multiplier) — here 0.13 * ln(3.5) = 163 ms, so at
+    /// most about 6 onsets/s. A genuinely STRONGER hit still breaks through early, which is
+    /// what makes this a prominence test rather than a longer refractory: a peak twice the
+    /// height of the last one needs only 0.13 * ln(1.75) = 73 ms.
+    ///
+    /// At 108 BPM the half-beat grid is 278 ms and the gate is down to 3.5 * exp(-278/130) =
+    /// 0.41 of the previous peak by then, so a hat at a fraction of a kick's flux still fires.
+    /// </summary>
+    private const double OnsetGateTau = 0.130, OnsetGateMultiplier = 3.5;
+
+    /// <summary>
     /// Envelope time constant for the F_FLUX field (not for onset detection, which still
     /// sees raw per-hop flux and must, or it would smear the peak it looks for).
     ///
@@ -123,6 +155,35 @@ public sealed class Analyzer
     /// question is not asked at all. Both exist for reasons recorded at the use site.
     /// </summary>
     private const double CombTau = 1.5, CombMinPeak = 0.18;
+
+    /// <summary>
+    /// Whether the comb ratio may actually MOVE the octave. Currently false, and the
+    /// reasoning is the substance of this constant.
+    ///
+    /// The comb test was built and validated against an onset envelope that was saturated by
+    /// a detector bug — 13.5 onsets/s where the material had 3.6. That density is what gave
+    /// its interleaved combs enough content to compare. Fixing the detector took the density
+    /// away, and the test stopped working: on MusicLike at 88 BPM the on-beat and off-beat
+    /// combs now score within 2% of each other, so the case it was written for is no longer
+    /// caught.
+    ///
+    /// Worse, it stopped being harmless. Left active it fires spuriously mid-run on §14's
+    /// drifting-click-track acceptance case, which has been correct for the whole project:
+    /// measured a 64.3 BPM excursion at 52.4 s against a ±2 BPM requirement, a clean octave
+    /// jump, with mean error over the graded window at 24.8 BPM. Fixed-tempo click tracks are
+    /// unaffected, which is exactly why this was not caught by the per-tempo diagnostic and
+    /// needed the drift test to surface.
+    ///
+    /// So the ACTUATOR is off and the INSTRUMENT stays on: CombRatio and CombSmooth are still
+    /// computed and still exposed, because they are what a re-fit against a real capture will
+    /// be judged on. A discriminator that cannot be calibrated must not be left in the
+    /// decision path, but throwing away the measurement would mean deriving it a third time.
+    ///
+    /// To close this: record tests/fixtures/real/tight-backbeat.json, re-fit
+    /// <see cref="CombAlternation"/> against it, confirm the drift case still passes, and set
+    /// this true.
+    /// </summary>
+    private const bool CombDoublingEnabled = false;
 
     /// <summary>
     /// Above this the off-beat comb is empty rather than quiet, which means no subdivision
@@ -198,6 +259,12 @@ public sealed class Analyzer
     private int _fluxAt;
     private double _prevFlux;
 
+    /// <summary>Raw (unnormalized) spectral rise, this hop and the previous one. See Flux().</summary>
+    private double _rise, _prevRise;
+
+    /// <summary>Spectral rise in the kick band only, used as the BEAT strength. See Flux().</summary>
+    private double _riseLow, _prevRiseLow;
+
     /// <summary>
     /// F_FLUX's own normalizer, independent of the onset detector. Symmetric envelope
     /// because flux is a rate of change, not a level: a peak follower on it would track
@@ -218,6 +285,9 @@ public sealed class Analyzer
     /// </summary>
     private readonly float[] _strengthHist;
     private double _onsetStrength;
+
+    /// <summary>Post-onset detection bar, decaying. See <see cref="OnsetGateTau"/>.</summary>
+    private double _onsetGate;
     private int _onsetHistAt;
     private readonly float[] _bpmHist;
     private readonly float[] _bpmSort;
@@ -434,13 +504,15 @@ public sealed class Analyzer
         _loudSlow = 0;
 
         Array.Clear(_fluxHist); _fluxAt = 0;
-        _prevFlux = 0;
+        _prevFlux = 0; _rise = 0; _prevRise = 0;
+        _riseLow = 0; _prevRiseLow = 0;
         _fluxNorm.Reset(); _fluxEnvN = 0;
-        _onsetImpulse = 0; _lastOnsetTime = -1;
+        _onsetImpulse = 0; _lastOnsetTime = -1; _onsetGate = 0;
 
         Array.Clear(_onsetHist); Array.Clear(_strengthHist);
         _onsetStrength = 0; _onsetHistAt = 0;
         CombRatio = 1; _combSmooth = 1; _octaveDoubled = false;
+        OnsetCount = 0;
         Array.Clear(_bpmHist); _bpmHistAt = 0; _bpmHistCount = 0;
         _bpm = 0; _bpmConf = 0; _beatPhase = 0; _beatCount = 0; _beatFromOnset = false;
 
@@ -750,13 +822,39 @@ public sealed class Analyzer
         int lo = Math.Max(1, (int)(FluxLoHz / _fmt.BinHz));
         int hi = Math.Min(_bins - 1, (int)(FluxHiHz / _fmt.BinHz));
 
-        double rise = 0, total = 0;
+        // The kick-band rise, kept for diagnostics only. It was TRIED as the beat-strength
+        // weight for BeatCombRatio, on the reasoning that the beat is where the kick is, and
+        // it was measurably worse: a click track's clicks are lowpassed noise bursts whose
+        // low-band content varies randomly from click to click, so the comb read that variance
+        // as alternation and HALVED tempi that had been correct for the whole project —
+        // 120 BPM to 60.00, 150 BPM to 74.01. The flat rise leaves click tracks at comb
+        // 1.05-1.12, well under the threshold. Recorded rather than deleted so the next person
+        // does not re-derive it.
+        int lowHi = Math.Min(_bins - 1, (int)(150.0 / _fmt.BinHz));
+
+        double rise = 0, total = 0, riseLow = 0;
         for (int k = lo; k <= hi; k++)
         {
             double d = _mag[k] - _prevMag[k];
-            if (d > 0) rise += d;
+            if (d > 0)
+            {
+                rise += d;
+                if (k <= lowHi) riseLow += d;
+            }
             total += _mag[k];
         }
+        _riseLow = riseLow;
+
+        // The RATIO is what §7.2 wants for detection and for F_FLUX: it is level-invariant, so
+        // the threshold means the same thing in a loud passage and a quiet one.
+        //
+        // But level invariance is exactly wrong for measuring how BIG an onset was, and
+        // BeatCombRatio needs that. Measured: with the ratio as the strength weight, the
+        // on-beat and off-beat combs of MusicLike scored 1.01 — indistinguishable — because a
+        // lone hat divides a small rise by a small total and lands as high as a kick, bass and
+        // chord hitting together. So the raw rise is kept alongside. It is the standard onset
+        // strength measure and it is level-sensitive, which is the property being asked for.
+        _rise = rise;
         return rise / (total + 1e-9);
     }
 
@@ -772,26 +870,42 @@ public sealed class Analyzer
         double thr = median * 1.4 + 0.02;
         bool refractoryOver = _lastOnsetTime < 0 || _time - _lastOnsetTime >= OnsetRefractory;
 
+        // The post-onset gate decays back toward the ordinary threshold; the bar is whichever
+        // is higher. See OnsetGateTau for the measurement this exists to fix.
+        _onsetGate *= Math.Exp(-_dt / OnsetGateTau);
+        double bar = Math.Max(thr, _onsetGate);
+
         // Crossing the threshold is not enough — the flux must also be FALLING, i.e. the
         // previous frame was the local peak. Without it, dense material sits above the
         // adaptive threshold for many frames in a row and re-triggers every time the 50 ms
         // refractory expires: measured on real audio, the onset impulse never decayed below
         // 0.53 and averaged 0.84, so every onset-driven motif fired continuously.
-        bool peaked = _prevFlux >= flux && _prevFlux > thr;
+        bool peaked = _prevFlux >= flux && _prevFlux > bar;
         double peakFlux = _prevFlux;
+        // The rise that belongs to the PEAK hop, not to this one — detection is one hop
+        // behind, and pairing a peak with the following hop's rise would weight every onset
+        // by its own decay rather than its attack.
+        double peakRise = _prevRise;
         _prevFlux = flux;
+        _prevRise = _rise;
+        _prevRiseLow = _riseLow;
 
         if (peaked && refractoryOver)
         {
             _onsetImpulse = 1;
-            // The SAME impulse, weighted by how big the flux peak that caused it actually
-            // was. F_ONSET has to stay a unit impulse — presets gate motifs on
-            // `onset > 0.82` and the parity fixtures encode it — but that unit height
+            OnsetCount++;
+            // Arm the gate against this peak, so the shoulders of THIS event cannot each
+            // count as their own onset.
+            _onsetGate = peakFlux * OnsetGateMultiplier;
+            // The SAME impulse, weighted by how big the onset actually was. F_ONSET stays a
+            // unit impulse — presets gate motifs on `onset > 0.82` — but that unit height
             // throws away the one thing that separates a beat from a subdivision, so the
-            // strength is kept alongside rather than folded in. Raw flux, deliberately
-            // unnormalized: BeatCombRatio only ever compares two combs of this signal
-            // against each other, and a common scale factor cancels in the ratio.
-            _onsetStrength = peakFlux;
+            // strength is kept alongside rather than folded in.
+            //
+            // Weighted by the raw RISE, not by the flux ratio: see the note in Flux(). Left
+            // unnormalized, because BeatCombRatio only ever compares two combs of this signal
+            // against each other and a common scale factor cancels in the ratio.
+            _onsetStrength = peakRise;
             _lastOnsetTime = _time;
         }
         else
@@ -889,6 +1003,14 @@ public sealed class Analyzer
         // §7.3 exists to leave alone.
         return ratio > CombSparseLimit ? 1 : ratio;
     }
+
+    /// <summary>
+    /// How many onsets have actually been detected. Divided by elapsed time this is the
+    /// onset RATE, which is what separates "this material is dense" from "the detector is
+    /// retriggering" — two explanations for a saturated envelope that look identical in the
+    /// envelope itself.
+    /// </summary>
+    public long OnsetCount { get; private set; }
 
     /// <summary>Last comb ratio computed, for the octave diagnostics.</summary>
     public double CombRatio { get; private set; } = 1;
@@ -1069,10 +1191,13 @@ public sealed class Analyzer
         _octaveDoubled = _octaveDoubled ? _combSmooth > CombRelease
                                         : _combSmooth > CombAlternation;
 
-        // Not applied to a lag the harmonic sum already moved: the two mechanisms answer the
-        // same question, and letting both fire could halve and then double, arriving at an
-        // octave neither of them chose.
-        if (chosen == bestLag && _octaveDoubled && bestLag * 2 <= lagMax) chosen = bestLag * 2;
+        // MEASURED EVERY HOP, NOT APPLIED. See CombDoublingEnabled.
+        //
+        // Not applied to a lag the harmonic sum already moved either: the two mechanisms
+        // answer the same question, and letting both fire could halve and then double,
+        // arriving at an octave neither of them chose.
+        if (CombDoublingEnabled && chosen == bestLag && _octaveDoubled && bestLag * 2 <= lagMax)
+            chosen = bestLag * 2;
 
         // Parabolic interpolation around the peak. Without it, lag quantization alone is
         // ~2.6 BPM at 120 BPM — wider than the ±2 BPM the drifting-click-track test

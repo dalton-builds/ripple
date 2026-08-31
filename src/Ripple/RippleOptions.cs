@@ -89,18 +89,17 @@ public sealed class RippleOptions
     public bool Trace;
 
     /// <summary>
-    /// §11's footprint budget as a gate: render the timeline, assert p99 / working set /
+    /// §11's footprint budget as a gate: render the timeline, assert p99 / private bytes /
     /// zero Gen0, exit nonzero on failure. See <see cref="Render.BudgetGate"/>.
     /// </summary>
     public bool BudgetTest;
     public double BudgetSeconds = 60;
 
     /// <summary>
-    /// Override the absolute working-set ceiling, in MB. 0 keeps the plan's 60. Exists so a
-    /// budget the platform cannot meet can be rebased by whoever owns the plan, rather than
-    /// by whoever is closest to the constant.
+    /// Override the private-bytes ceiling, in MB. 0 keeps the committed 128. Exists so the
+    /// budget can be rebased from the command line rather than by editing a constant.
     /// </summary>
-    public long BudgetWorkingSetMb;
+    public long BudgetPrivateMb;
 
     /// <summary>
     /// Long-run soak: render for this many hours, reporting working set periodically, then
@@ -155,8 +154,8 @@ public sealed class RippleOptions
                     // display rather than the renderer.
                     o.VSync = false;
                     break;
-                case "--budget-working-set":
-                    o.BudgetWorkingSetMb = long.Parse(Next(a),
+                case "--budget-private":
+                    o.BudgetPrivateMb = long.Parse(Next(a),
                         System.Globalization.CultureInfo.InvariantCulture);
                     break;
                 case "--budget-seconds":
@@ -227,7 +226,7 @@ public sealed class RippleOptions
                  [--parity-mode a|b] [--preset <id|index>] [--stride N]
                  [--size 960x540] [--scale 0.75] [--trace]
 
-          Ripple --budget-test [--budget-seconds 60] [--budget-working-set MB]
+          Ripple --budget-test [--budget-seconds 60] [--budget-private MB]
           Ripple --soak <hours>
 
         With no arguments at all, Ripple reads %APPDATA%\Ripple\config.json —
@@ -236,18 +235,22 @@ public sealed class RippleOptions
 
         --budget-test is a GATE, not a report: it replays a 60 s scripted
         timeline with vsync off and asserts p99 frame time under 16.6 ms, zero
-        Gen0 collections in the window, and the footprint budget. It exits
+        Gen0 collections in the window, and private bytes under 128 MB. It exits
         nonzero on failure.
 
-        The absolute working-set budget of 60 MB is not reachable on a .NET plus
-        OpenGL stack — measured floor is 137 MB before the first frame is drawn,
-        against a managed heap under 2 MB. --budget-working-set rebases that
-        ceiling deliberately; the growth assertion is the one that protects an
-        unattended run either way.
+        The footprint budget is graded on PRIVATE BYTES, not working set. §11
+        originally said "working set under 60 MB"; both halves of that were
+        wrong and the correction is measured. 60 MB is unreachable on a .NET
+        plus OpenGL stack — the floor is 137 MB resident before the first frame
+        is drawn, against a managed heap of 1.8 MB — and working set is elastic
+        anyway: it wandered 46 MB during an idle soak while private bytes did
+        not move. --budget-private rebases the ceiling from the command line.
 
-        --soak renders for N hours, reporting working set, GC counts and frame
-        time every five minutes. It is looking for drift, which a 60 s test
-        cannot see.
+        --soak renders for N hours, reporting working set, private bytes,
+        handles, GC counts and frame time every five minutes, then prints a
+        pass/fail on drift. It is looking for a leak, which a 60 s test cannot
+        see. Drift is graded from a baseline latched at 20 minutes, because the
+        GL driver allocates lazily for the first quarter of an hour.
 
         Batch dump renders the whole timeline in exact step mode and writes every
         Nth frame as a PNG, plus a manifest.
