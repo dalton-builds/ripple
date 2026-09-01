@@ -61,10 +61,45 @@ public sealed class HostState
         _zeroCrossings.Clear();
     }
 
+    /// <summary>
+    /// Visual decay envelopes, in BEATS rather than in seconds.
+    ///
+    /// A bolt with a fixed 155 ms tail resolves at an arbitrary point in the bar — at 80 BPM
+    /// it is long gone before the next beat, at 170 BPM it is still visible when the next one
+    /// lands, and the difference is audible-looking. Scaling by `60/BPM` makes a pulse resolve
+    /// in the same musical time regardless of tempo, which is what makes the motion read as
+    /// synced rather than merely triggered.
+    ///
+    /// Both are GATED ON CONFIDENCE and fall back to the authored fixed constants, because
+    /// a beat-relative envelope on a grid the DSP does not trust is a decay time derived from
+    /// a guess. Blended rather than switched, so crossing the threshold is not its own visible
+    /// event. Returns the scale factor to apply to a fixed time constant.
+    /// </summary>
+    private static double BeatScale(ReadOnlySpan<float> f, double referenceBpm)
+    {
+        double bpm = f[FF.Bpm];
+        double conf = Math.Clamp(f[FF.BpmConf], 0, 1);
+        if (bpm < 30 || conf <= 0) return 1.0;
+
+        // A tempo twice the reference should halve the envelope, not more: clamped so a
+        // 60 BPM reading cannot stretch a 155 ms tail to half a second.
+        double scale = Math.Clamp(referenceBpm / bpm, 0.5, 2.0);
+        // Confidence blends between the authored constant (1.0) and the beat-relative one.
+        return 1.0 + (scale - 1.0) * conf;
+    }
+
+    /// <summary>
+    /// Tempo the fixed motif constants were authored against. 1.15 s of rose decay is about
+    /// one and a half bars at 104 BPM, and 155 ms of bolt is about a sixteenth.
+    /// </summary>
+    private const double AuthoredBpm = 104.0;
+
     /// <summary>Mirror of advanceMotifs(). Roses bloom on chord change, bolts on onsets.</summary>
     public void AdvanceMotifs(double dt, DrawState d, ReadOnlySpan<float> f)
     {
-        Rose *= Math.Exp(-dt / 1.15);
+        double beat = BeatScale(f, AuthoredBpm);
+
+        Rose *= Math.Exp(-dt / (1.15 * beat));
         RoseCool -= dt;
         if (f[FF.ChromaFlux] > d.RoseThreshold && RoseCool <= 0)
         {
@@ -73,7 +108,7 @@ public sealed class HostState
             RoseCool = 0.85;
         }
 
-        Bolt *= Math.Exp(-dt / 0.155);
+        Bolt *= Math.Exp(-dt / (0.155 * beat));
         BoltCool -= dt;
         if (f[FF.Onset] > 0.82 && f[FF.Percussivity] > d.BoltThreshold && BoltCool <= 0)
         {

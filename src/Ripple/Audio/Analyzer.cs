@@ -186,6 +186,36 @@ public sealed class Analyzer
     private const bool CombDoublingEnabled = false;
 
     /// <summary>
+    /// The perceptual tempo prior: centre and log-width.
+    ///
+    /// `P(lag) = exp(-0.5 * (ln(bpm/centre) / sigma)^2)`, multiplied into the ACF when
+    /// choosing the lag. Sigma is in NATURAL LOG of BPM, so 0.30 puts ±1 sigma at
+    /// 120·e^±0.30 = 89..162 BPM.
+    ///
+    /// See GateDiagnostics.Tempo_prior_sweep for the measured trade-off, and the README for
+    /// the conclusion. The short version: the prior does what it is supposed to do and cannot
+    /// be turned up far enough to fix the ambiguous cases without breaking metronomic ones,
+    /// because a click track at 60 or 180 BPM is genuinely far from any sensible centre.
+    /// </summary>
+    public const double TempoPriorCentre = 120.0;
+
+    /// <summary>
+    /// Log-width of the prior. 0 DISABLES it, which is the committed default — see the class
+    /// note above. Settable so GateDiagnostics can sweep it rather than requiring a rebuild
+    /// per value; production never writes it.
+    /// </summary>
+    internal double PriorSigma { get; set; }
+
+    /// <summary>Log-normal prior over BPM, evaluated at a lag. 1.0 when disabled.</summary>
+    private double TempoPrior(int lag, double frameRate)
+    {
+        if (PriorSigma <= 0 || lag <= 0) return 1.0;
+        double bpm = 60.0 * frameRate / lag;
+        double z = Math.Log(bpm / TempoPriorCentre) / PriorSigma;
+        return Math.Exp(-0.5 * z * z);
+    }
+
+    /// <summary>
     /// Above this the off-beat comb is empty rather than quiet, which means no subdivision
     /// — see the note in <see cref="BeatCombRatio"/>. A real beat-against-subdivision
     /// pattern measures 1.3-2.5; free-time material measures in the thousands.
@@ -697,7 +727,66 @@ public sealed class Analyzer
     /// </summary>
     private const double LevelGamma = 4.66;
 
-    private static double Calibrate(double v) => Math.Pow(v, LevelGamma);
+    /// <summary>
+    /// Per-band calibration exponents, replacing the single <see cref="LevelGamma"/> for the
+    /// eight bands. FITTED, not guessed — `gamma[b] = ln(synthetic_median[b]) / ln(pre[b])`,
+    /// where `pre[b]` is the normalizer's own output recovered by inverting the committed
+    /// scalar curve on the real capture.
+    ///
+    /// WHY ONE EXPONENT COULD NOT DO IT. The real-versus-synthetic median deltas run +0.04 at
+    /// `sub` to +0.41 at `air`. A single exponent lands the middle bands and leaves `sub`
+    /// under-corrected and `air` over-corrected, and the whole point of the calibration is
+    /// that a preset authored in the harness behaves the same on real audio — which is a
+    /// per-band property, not an aggregate one.
+    ///
+    /// READ THE SIZE OF THESE NUMBERS AS A SYMPTOM. Needing 9.75 to 45.59 means the
+    /// normalizer's pre-calibration output is pinned hard against 1.0 — measured 0.886 to
+    /// 0.980 at the median, with `lowMid` spanning only 0.928..0.997 from p10 to p90. The
+    /// curve is expanding a 7%-of-full-scale input range across most of the output, so it is
+    /// doing real work, but it is compensating for §7.1's peak-follower envelope rather than
+    /// fixing it. See the LevelGamma note for why the envelope itself is left alone.
+    ///
+    /// THE COEFFICIENTS ARE NOT FITTED YET, AND THAT IS A MEASUREMENT, NOT AN OMISSION. All
+    /// eight are the old scalar, so this change is behaviour-neutral until there is data to
+    /// fit against. Running the fit on the two materials available gave:
+    ///
+    ///     band         from the capture    from MusicLike    disagreement
+    ///     sub                     9.75              5.23           1.9x
+    ///     bass                   18.52              5.20           3.6x
+    ///     lowMid                 45.59              9.89           4.6x
+    ///     mid                    26.14             12.24           2.1x
+    ///     hiMid                  22.86              6.30           3.6x
+    ///     presence               14.81              9.28           1.6x
+    ///     brilliance             18.59             11.55           1.6x
+    ///     air                    22.86             14.92           1.5x
+    ///
+    /// The same procedure on two pieces of material disagrees by up to 4.6x, because the
+    /// exponent MULTIPLIES the material difference: at gamma 45, a pre-gamma median of 0.95
+    /// instead of 0.98 moves the output from 0.40 to 0.10. Committing the capture-fitted
+    /// column was tried and measured — it pinned `lowMid` dead at 0.014 on MusicLike and made
+    /// the aggregate worse, 0.192 to 0.205 mean absolute delta. A calibration that depends
+    /// this strongly on which recording it was fitted to is not a calibration.
+    ///
+    /// What both columns DO agree on: every band needs more correction than 4.66. So the
+    /// direction is real and the magnitude is not knowable from one recording. Fit against the
+    /// five real captures with `tools/fit-band-gamma.mjs` and replace this array.
+    ///
+    /// The deeper reading is that gamma is the wrong layer. Needing exponents this large means
+    /// §7.1's peak-follower envelope has already thrown the range away upstream — pre-gamma
+    /// `lowMid` spans 0.928..0.997 from p10 to p90 on real audio, 7% of full scale — and a
+    /// curve that expands 7% into most of 0..1 is amplifying whatever noise is in those 7%.
+    /// </summary>
+    private static readonly double[] BandGamma =
+        [LevelGamma, LevelGamma, LevelGamma, LevelGamma,
+         LevelGamma, LevelGamma, LevelGamma, LevelGamma];
+
+    /// <summary>
+    /// rms and peak get their own, and loudSlow deliberately does NOT: it is a 3 s EMA of the
+    /// already-calibrated rms, so giving it a third exponent would apply the correction twice.
+    /// </summary>
+    private const double RmsGamma = LevelGamma, PeakGamma = LevelGamma;
+
+    private static double Calibrate(double v, double gamma) => Math.Pow(v, gamma);
 
     private void Bands(Span<float> f)
     {
@@ -729,7 +818,7 @@ public sealed class Analyzer
             // The 6 dB floor is what stops silence being amplified into noise.
             double span = Math.Max(_bandHi[b] - _bandLo[b], 6.0);
             double v = (_bandEnv[b] - _bandLo[b]) / span;
-            _bandNorm[b] = Calibrate(Math.Clamp(v, 0, 1));
+            _bandNorm[b] = Calibrate(Math.Clamp(v, 0, 1), BandGamma[b]);
         }
 
         // Reference level for the gate: the loudest band's recent peak, so a momentary dip
@@ -776,8 +865,8 @@ public sealed class Analyzer
         double rmsDb = 20 * Math.Log10(rms + 1e-9);
         double peakDb = 20 * Math.Log10(peak + 1e-9);
 
-        double rmsN = Calibrate(_rmsNorm.Step(rmsDb, _dt));
-        double peakN = Calibrate(_peakNorm.Step(peakDb, _dt));
+        double rmsN = Calibrate(_rmsNorm.Step(rmsDb, _dt), RmsGamma);
+        double peakN = Calibrate(_peakNorm.Step(peakDb, _dt), PeakGamma);
 
         f[FF.Rms] = (float)rmsN;
         f[FF.Peak] = (float)peakN;
@@ -1065,7 +1154,7 @@ public sealed class Analyzer
         for (int i = 0; i < n; i++) { double d = _onsetHist[i] - hMean; hVar += d * d; }
         hVar /= n;
 
-        double best = 0, mean = 0, sumSq = 0;
+        double best = 0, mean = 0, sumSq = 0, bestScore = 0;
         int bestLag = 0;
         int count = 0;
         Span<double> acf = stackalloc double[lagMax + 1];
@@ -1093,8 +1182,27 @@ public sealed class Analyzer
             double v = sum / taps / hVar;
             acf[lag] = v;
             mean += v; sumSq += v * v; count++;
-            if (v > best) { best = v; bestLag = lag; }
+
+            // PERCEPTUAL TEMPO PRIOR, §7.3's octave problem attacked from outside the ACF.
+            //
+            // The structural objection that kills the harmonic sum does not apply here, and
+            // that is the point: any score that is a monotone function of the ACF has the
+            // subdivision winning by construction, because acf[lag] IS the peak when the
+            // subdivision carries the strongest periodicity. A prior over LAG is an
+            // independent term — it does not read the ACF at all — so it can move the choice.
+            //
+            // Log-normal in BPM, centred on TempoPriorCentre. Listeners have a preferred
+            // tapping rate around 100-130 BPM and resolve octave ambiguity toward it, which is
+            // the effect being borrowed.
+            double scored = v * TempoPrior(lag, _fmt.FrameRate);
+            if (scored > bestScore) { bestScore = scored; bestLag = lag; }
+            if (v > best) best = v;
         }
+
+        // Confidence still comes from the ACF value at the CHOSEN lag, not from the global
+        // peak: the prior may have moved the choice, and reporting the peak's peakiness for a
+        // lag the peak is not at would overstate how certain the tracker is.
+        if (bestLag > 0) best = acf[bestLag];
         mean = count > 0 ? mean / count : 0;
         double variance = count > 0 ? Math.Max(0, sumSq / count - mean * mean) : 0;
         AcfStd = Math.Sqrt(variance);
@@ -1147,7 +1255,7 @@ public sealed class Analyzer
         }
 
         int chosen = bestLag;
-        double bestScore = Harmonic(acf, bestLag, lagMax);
+        double harmonicBase = Harmonic(acf, bestLag, lagMax);
         foreach (double ratio in (double[])[0.25, 1.0 / 3, 0.5])
         {
             int cand = (int)Math.Round(bestLag * ratio);
@@ -1162,7 +1270,7 @@ public sealed class Analyzer
             // every candidate — that is defect 1 above, and it is the whole reason this is a
             // scored comparison rather than a sequential walk.
             double s = Harmonic(acf, cand, lagMax);
-            if (s > bestScore * 1.08 && s > Harmonic(acf, chosen, lagMax)) chosen = cand;
+            if (s > harmonicBase * 1.08 && s > Harmonic(acf, chosen, lagMax)) chosen = cand;
         }
 
         // The other direction: the raw peak is on the SUBDIVISION and the beat is twice as

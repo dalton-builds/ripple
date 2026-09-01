@@ -57,6 +57,18 @@
     "grain": 0.03,
     "vignette": 0.25
   },
+  "_rhythm_comment": [
+    "The last four mapping entries are the rhythmic ones; everything before them is a",
+    "smooth envelope. The constraint is that beat response goes through GEOMETRY, never",
+    "through global luminance: plan 12 rate-limits mean-luminance delta per frame, so a",
+    "bright pulse on the beat gets clamped and the limiter dims the whole image in",
+    "response to it. Warp, zoom, rotate and palette are not rate-limited, and under a long",
+    "feedback decay a geometric pulse smears into the trails rather than fighting the",
+    "safety system. beatPhase and barPhase are RAMPS, pulse-shaped host-side before",
+    "routing (see RhythmicShape), and both scale with bpmConfidence so an untrusted grid",
+    "drives nothing."
+  ],
+
   "mapping": {
     "sub": "feedbackZoom",
     "bass": "warpAmount",
@@ -67,7 +79,10 @@
     "stereoWidth": "symmetry",
     "keyHue": "paletteRotate",
     "novelty": "fractalMorph",
-    "percussivity": "motifGain"
+    "percussivity": "motifGain",
+    "beatPhase": "feedbackZoomPulse",
+    "onset": "warpAmount",
+    "flux": "fractalMorph"
   },
   "safety": {
     "maxLuminanceDelta": 0.08,

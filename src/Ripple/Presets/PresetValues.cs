@@ -18,6 +18,23 @@ public enum MapTarget
     FractalIterations, FractalMorph, MotifOpacity, MotifGain,
     ParticleEmit, Grain, Symmetry, PaletteRotate,
     BloomGain, Exposure, Rotate,
+
+    /// <summary>
+    /// Zoom again, but with a gain sized for a TRANSIENT rather than for a sustained
+    /// envelope. It exists because measurement said it had to.
+    ///
+    /// `feedbackZoom` adds `v * 0.0055`, which is right for a band sitting around 0.5 all the
+    /// time. Routed a beat pulse, it moved zoom from 1.0067 to 1.0111 — a 0.4% swing, tightly
+    /// correlated with the beat at r = 0.851 and completely invisible. A pulse is only high
+    /// for a fraction of a beat, so it needs more amplitude than a continuous drive to carry
+    /// the same weight, and 0.012 puts it alongside warp.frag's own sub-bass term (0.011)
+    /// rather than a fifth of it.
+    ///
+    /// Raising `feedbackZoom` itself would have been the wrong fix: `sub -> feedbackZoom` is
+    /// wired in all 13 presets, so it would have changed every authored bass response to buy
+    /// one rhythmic route.
+    /// </summary>
+    FeedbackZoomPulse,
 }
 
 /// <summary>
@@ -202,6 +219,7 @@ public sealed class PresetValues
     private static MapTarget ParseTarget(string? s) => s switch
     {
         "feedbackZoom" => MapTarget.FeedbackZoom,
+        "feedbackZoomPulse" => MapTarget.FeedbackZoomPulse,
         "feedbackDecay" => MapTarget.FeedbackDecay,
         "warpAmount" => MapTarget.WarpAmount,
         "warpScale" => MapTarget.WarpScale,

@@ -94,6 +94,34 @@ public sealed class DrawState
         Paint = p.PaintGain * (1 - Math.Min(p.Decay, 0.9995)) * 30;
     }
 
+    /// <summary>Sharpness of the beat and bar pulses. Mirrors features.glsl's beatPulse().</summary>
+    private const double BeatPulseSharpness = 3.0, BarPulseSharpness = 2.0;
+
+    /// <summary>
+    /// Convert a routed feature into the value the mapping should actually apply.
+    ///
+    /// Everything passes through unchanged EXCEPT the two phase fields, and they have to be
+    /// shaped or they are useless as drives. `beatPhase` is a RAMP — 0 on the beat, climbing
+    /// to 1 just before the next one — so routed raw it makes a parameter drift up and snap
+    /// back: a sawtooth, reading as a glitch on the beat rather than a pulse on it. The
+    /// shaped form is 1 ON the beat and decaying, which is what "on the beat" means and what
+    /// features.glsl's beatPulse() already does shader-side.
+    ///
+    /// Both are scaled by bpmConfidence, so a grid the DSP does not trust drives nothing.
+    /// That matters more than it looks: below §7.3's floor the DSP is already synthesising
+    /// beatPhase from the onset envelope, and a full-strength pulse on a guessed grid is
+    /// worse than no pulse at all. Scaling rather than switching keeps it a fade.
+    /// </summary>
+    private static double RhythmicShape(int field, ReadOnlySpan<float> f)
+    {
+        double v = f[field];
+        if (field == FF.BeatPhase)
+            return Math.Pow(1 - v, BeatPulseSharpness) * f[FF.BpmConf];
+        if (field == FF.BarPhase)
+            return Math.Pow(1 - v, BarPulseSharpness) * f[FF.BpmConf];
+        return v;
+    }
+
     /// <summary>
     /// Route feature values into draw parameters. The §10 mapping block is
     /// DATA, not code — this switch is the entire routing surface, and it must
@@ -104,10 +132,11 @@ public sealed class DrawState
     {
         foreach (var (field, target) in p.Mapping)
         {
-            double v = f[field];
+            double v = RhythmicShape(field, f);
             switch (target)
             {
                 case MapTarget.FeedbackZoom: Zoom += v * 0.0055; break;
+                case MapTarget.FeedbackZoomPulse: Zoom += v * 0.012; break;
                 case MapTarget.FeedbackDecay: Decay = Math.Min(0.9995, Decay + v * 0.006); break;
                 case MapTarget.WarpAmount: WarpAmount *= 0.45 + 1.15 * v; break;
                 case MapTarget.WarpScale: WarpScale *= 0.7 + 0.6 * v; break;

@@ -889,11 +889,23 @@ void main() {
     p.x *= F_ASPECT;
 
     // Sub bass breathes the whole field in and out. Small number, large effect.
-    p *= uScale * (1.0 - 0.12 * F_SUB);
-    p = rot2(0.018 * t + 0.35 * F_STEREO_WIDTH) * p;
+    //
+    // The beat breathes it too, and this is where that belongs. It used to live in the
+    // exposure line at the bottom as a brightness pulse, which was wrong twice over: plan
+    // 12's limiter caps mean-luminance delta per frame, so a bright beat pulse gets clamped
+    // and the limiter dims the WHOLE image in response to the beat — the pulse fought the
+    // safety system and lost. Geometry is not rate-limited, and under a long feedback decay
+    // a scale pulse smears into the trails, which is how MilkDrop reads as beat-synced.
+    //
+    // NOTE, since this file is one big template literal: no backticks in shader comments.
+    // A backtick here terminates the literal and the whole script block fails to parse,
+    // which surfaces as "gl is not defined" from an unrelated block.
+    p *= uScale * (1.0 - 0.12 * F_SUB - 0.030 * beatPulse(3.0) * F_BPM_CONF);
+    p = rot2(0.018 * t + 0.35 * F_STEREO_WIDTH + 0.06 * barPulse(2.0) * F_BPM_CONF) * p;
 
     int oct = int(clamp(uOct, 2.0, 6.0));
-    float amt = uWarp * (0.65 + 1.15 * F_BASS);
+    // Transients kick the churn rather than the exposure, same reasoning.
+    float amt = uWarp * (0.65 + 1.15 * F_BASS + 0.45 * F_ONSET * F_PERCUSSIVITY);
 
     vec2 mid;
     float f = liquid(p, t, amt, oct, mid);
@@ -955,8 +967,10 @@ void main() {
          * rim * uRim * (0.50 + 1.20 * F_HIMID + 0.60 * F_BRILLIANCE);
 
     col *= mask;
-    col *= 0.45 + 0.95 * F_RMS + 0.55 * beatPulse(4.0) * F_BPM_CONF
-         + 0.65 * F_ONSET * F_PERCUSSIVITY;
+    // LEVEL drives exposure; RHYTHM drives geometry. The beat and onset terms that used to
+    // be here moved up into the field scale and the warp amount — see the note there. What
+    // is left is the loudness of the passage, which is what exposure should follow.
+    col *= 0.45 + 1.30 * F_RMS;
 
     fragColor = vec4(col * uPaint * F_INTENSITY, 1.0);
 }
@@ -1745,14 +1759,14 @@ function mergeDeep(base, over) {
 
 /* --- the eight era presets, verbatim from presets/eras/*.json ------------- */
 const ERA_PRESETS = [
-{"schemaVersion":1,"id":"era-primal","name":"1965-67 Primal","eraId":0,"fractal":"warp_fbm","palette":{"stops":["#1A0033","#FF2D95","#FFE800","#00E5FF"],"chromaBlend":0.42,"rotateByKey":true},"feedback":{"decay":0.955,"zoom":1.008,"rotate":0.004,"warpAmount":0.55,"warpScale":3.4,"bassGain":1.5},"fractalParams":{"iterations":64,"escapeRadius":4.0,"orbitRadius":0.34,"beatMorph":0.85},"motifs":{"bolt":{"gain":1.1,"threshold":0.55,"forkDepth":3},"rose":{"gain":0.4,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.15,"atlas":"default","emitOn":"novelty"}},"particles":{"count":18000,"curlScale":2.6,"emitBand":5,"lifetime":2.0},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}},
-{"schemaVersion":1,"id":"era-live-dead","name":"1968-70 Live/Dead","eraId":1,"fractal":"warp_fbm","palette":{"stops":["#2B1A14","#8C2F1E","#C9762B","#E8D5A3"],"chromaBlend":0.3,"rotateByKey":true},"feedback":{"decay":0.978,"zoom":1.003,"rotate":0.001,"warpAmount":0.42,"warpScale":1.9,"bassGain":1.1},"fractalParams":{"iterations":72,"escapeRadius":4.0,"orbitRadius":0.22,"beatMorph":0.4},"motifs":{"bolt":{"gain":0.55,"threshold":0.55,"forkDepth":3},"rose":{"gain":0.7,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.2,"atlas":"default","emitOn":"novelty"}},"particles":{"count":16000,"curlScale":1.4,"emitBand":4,"lifetime":3.6},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}},
-{"schemaVersion":1,"id":"era-europe72","name":"1971-74 Europe '72","eraId":2,"fractal":"julia_orbit","palette":{"stops":["#0E1729","#4A7FC1","#8B6FD4","#D9E4F5"],"chromaBlend":0.35,"rotateByKey":true},"feedback":{"decay":0.985,"zoom":1.004,"rotate":0.0015,"warpAmount":0.35,"warpScale":2.4,"bassGain":1.2},"fractalParams":{"iterations":96,"escapeRadius":4.0,"orbitRadius":0.28,"beatMorph":0.6},"motifs":{"bolt":{"gain":0.8,"threshold":0.55,"forkDepth":3},"rose":{"gain":1.0,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.2,"atlas":"default","emitOn":"novelty"}},"particles":{"count":24000,"curlScale":1.8,"emitBand":5,"lifetime":3.2},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}},
-{"schemaVersion":1,"id":"era-terrapin","name":"1976-79 Terrapin","eraId":3,"fractal":"warp_fbm","palette":{"stops":["#1F2419","#2E8B84","#E8A33D","#F2E3C4"],"chromaBlend":0.33,"rotateByKey":true},"feedback":{"decay":0.982,"zoom":1.0035,"rotate":0.0012,"warpAmount":0.38,"warpScale":2.1,"bassGain":1.15},"fractalParams":{"iterations":88,"escapeRadius":4.0,"orbitRadius":0.26,"beatMorph":0.55},"motifs":{"bolt":{"gain":0.7,"threshold":0.55,"forkDepth":3},"rose":{"gain":1.35,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.45,"atlas":"default","emitOn":"novelty"}},"particles":{"count":22000,"curlScale":1.6,"emitBand":4,"lifetime":3.4},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}},
-{"schemaVersion":1,"id":"era-brent","name":"1980-86 Brent","eraId":4,"fractal":"apollonian","palette":{"stops":["#050508","#00FF9C","#FF3D6E","#FFD400"],"chromaBlend":0.4,"rotateByKey":true},"feedback":{"decay":0.968,"zoom":1.006,"rotate":0.0028,"warpAmount":0.48,"warpScale":2.9,"bassGain":1.35},"fractalParams":{"iterations":80,"escapeRadius":4.0,"orbitRadius":0.3,"beatMorph":0.75},"motifs":{"bolt":{"gain":1.25,"threshold":0.55,"forkDepth":3},"rose":{"gain":0.6,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.25,"atlas":"default","emitOn":"novelty"}},"particles":{"count":26000,"curlScale":2.2,"emitBand":6,"lifetime":2.4},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}},
-{"schemaVersion":1,"id":"era-in-the-dark","name":"1987-90 In the Dark","eraId":5,"fractal":"julia_orbit","palette":{"stops":["#12061F","#7B2FBE","#00B8D4","#FF6B35"],"chromaBlend":0.36,"rotateByKey":true},"feedback":{"decay":0.988,"zoom":1.0035,"rotate":0.0016,"warpAmount":0.4,"warpScale":2.5,"bassGain":1.25},"fractalParams":{"iterations":104,"escapeRadius":4.0,"orbitRadius":0.31,"beatMorph":0.62},"motifs":{"bolt":{"gain":0.85,"threshold":0.55,"forkDepth":3},"rose":{"gain":0.95,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.28,"atlas":"default","emitOn":"novelty"}},"particles":{"count":34000,"curlScale":1.9,"emitBand":5,"lifetime":3.8},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}},
-{"schemaVersion":1,"id":"era-final","name":"1991-95 Final Years","eraId":6,"fractal":"warp_fbm","palette":{"stops":["#0A0710","#3D2B56","#6B4C93","#C9A8E0"],"chromaBlend":0.28,"rotateByKey":true},"feedback":{"decay":0.993,"zoom":1.0022,"rotate":0.0008,"warpAmount":0.3,"warpScale":1.7,"bassGain":1.05},"fractalParams":{"iterations":96,"escapeRadius":4.0,"orbitRadius":0.2,"beatMorph":0.35},"motifs":{"bolt":{"gain":0.5,"threshold":0.55,"forkDepth":3},"rose":{"gain":0.8,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.22,"atlas":"default","emitOn":"novelty"}},"particles":{"count":28000,"curlScale":1.2,"emitBand":4,"lifetime":4.6},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}},
-{"schemaVersion":1,"id":"era-unknown","name":"Unknown / Studio","eraId":7,"fractal":"warp_fbm","palette":{"stops":["#0B0D10","#2F4858","#86BBD8","#F6AE2D"],"chromaBlend":0.55,"rotateByKey":true},"feedback":{"decay":0.983,"zoom":1.0035,"rotate":0.0014,"warpAmount":0.38,"warpScale":2.2,"bassGain":1.15},"fractalParams":{"iterations":88,"escapeRadius":4.0,"orbitRadius":0.25,"beatMorph":0.5},"motifs":{"bolt":{"gain":0.75,"threshold":0.55,"forkDepth":3},"rose":{"gain":0.85,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.1,"atlas":"default","emitOn":"novelty"}},"particles":{"count":20000,"curlScale":1.7,"emitBand":5,"lifetime":3.2},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}}
+{"schemaVersion":1,"id":"era-primal","name":"1965-67 Primal","eraId":0,"fractal":"warp_fbm","palette":{"stops":["#1A0033","#FF2D95","#FFE800","#00E5FF"],"chromaBlend":0.42,"rotateByKey":true},"feedback":{"decay":0.955,"zoom":1.008,"rotate":0.004,"warpAmount":0.55,"warpScale":3.4,"bassGain":1.5},"fractalParams":{"iterations":64,"escapeRadius":4.0,"orbitRadius":0.34,"beatMorph":0.85},"motifs":{"bolt":{"gain":1.1,"threshold":0.55,"forkDepth":3},"rose":{"gain":0.4,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.15,"atlas":"default","emitOn":"novelty"}},"particles":{"count":18000,"curlScale":2.6,"emitBand":5,"lifetime":2.0},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain","beatPhase":"feedbackZoomPulse","onset":"warpAmount","flux":"fractalMorph"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}},
+{"schemaVersion":1,"id":"era-live-dead","name":"1968-70 Live/Dead","eraId":1,"fractal":"warp_fbm","palette":{"stops":["#2B1A14","#8C2F1E","#C9762B","#E8D5A3"],"chromaBlend":0.3,"rotateByKey":true},"feedback":{"decay":0.978,"zoom":1.003,"rotate":0.001,"warpAmount":0.42,"warpScale":1.9,"bassGain":1.1},"fractalParams":{"iterations":72,"escapeRadius":4.0,"orbitRadius":0.22,"beatMorph":0.4},"motifs":{"bolt":{"gain":0.55,"threshold":0.55,"forkDepth":3},"rose":{"gain":0.7,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.2,"atlas":"default","emitOn":"novelty"}},"particles":{"count":16000,"curlScale":1.4,"emitBand":4,"lifetime":3.6},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain","beatPhase":"feedbackZoomPulse","onset":"warpAmount","flux":"fractalMorph"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}},
+{"schemaVersion":1,"id":"era-europe72","name":"1971-74 Europe '72","eraId":2,"fractal":"julia_orbit","palette":{"stops":["#0E1729","#4A7FC1","#8B6FD4","#D9E4F5"],"chromaBlend":0.35,"rotateByKey":true},"feedback":{"decay":0.985,"zoom":1.004,"rotate":0.0015,"warpAmount":0.35,"warpScale":2.4,"bassGain":1.2},"fractalParams":{"iterations":96,"escapeRadius":4.0,"orbitRadius":0.28,"beatMorph":0.6},"motifs":{"bolt":{"gain":0.8,"threshold":0.55,"forkDepth":3},"rose":{"gain":1.0,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.2,"atlas":"default","emitOn":"novelty"}},"particles":{"count":24000,"curlScale":1.8,"emitBand":5,"lifetime":3.2},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain","beatPhase":"feedbackZoomPulse","onset":"warpAmount","flux":"fractalMorph"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}},
+{"schemaVersion":1,"id":"era-terrapin","name":"1976-79 Terrapin","eraId":3,"fractal":"warp_fbm","palette":{"stops":["#1F2419","#2E8B84","#E8A33D","#F2E3C4"],"chromaBlend":0.33,"rotateByKey":true},"feedback":{"decay":0.982,"zoom":1.0035,"rotate":0.0012,"warpAmount":0.38,"warpScale":2.1,"bassGain":1.15},"fractalParams":{"iterations":88,"escapeRadius":4.0,"orbitRadius":0.26,"beatMorph":0.55},"motifs":{"bolt":{"gain":0.7,"threshold":0.55,"forkDepth":3},"rose":{"gain":1.35,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.45,"atlas":"default","emitOn":"novelty"}},"particles":{"count":22000,"curlScale":1.6,"emitBand":4,"lifetime":3.4},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain","beatPhase":"feedbackZoomPulse","onset":"warpAmount","flux":"fractalMorph"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}},
+{"schemaVersion":1,"id":"era-brent","name":"1980-86 Brent","eraId":4,"fractal":"apollonian","palette":{"stops":["#050508","#00FF9C","#FF3D6E","#FFD400"],"chromaBlend":0.4,"rotateByKey":true},"feedback":{"decay":0.968,"zoom":1.006,"rotate":0.0028,"warpAmount":0.48,"warpScale":2.9,"bassGain":1.35},"fractalParams":{"iterations":80,"escapeRadius":4.0,"orbitRadius":0.3,"beatMorph":0.75},"motifs":{"bolt":{"gain":1.25,"threshold":0.55,"forkDepth":3},"rose":{"gain":0.6,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.25,"atlas":"default","emitOn":"novelty"}},"particles":{"count":26000,"curlScale":2.2,"emitBand":6,"lifetime":2.4},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain","beatPhase":"feedbackZoomPulse","onset":"warpAmount","flux":"fractalMorph"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}},
+{"schemaVersion":1,"id":"era-in-the-dark","name":"1987-90 In the Dark","eraId":5,"fractal":"julia_orbit","palette":{"stops":["#12061F","#7B2FBE","#00B8D4","#FF6B35"],"chromaBlend":0.36,"rotateByKey":true},"feedback":{"decay":0.988,"zoom":1.0035,"rotate":0.0016,"warpAmount":0.4,"warpScale":2.5,"bassGain":1.25},"fractalParams":{"iterations":104,"escapeRadius":4.0,"orbitRadius":0.31,"beatMorph":0.62},"motifs":{"bolt":{"gain":0.85,"threshold":0.55,"forkDepth":3},"rose":{"gain":0.95,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.28,"atlas":"default","emitOn":"novelty"}},"particles":{"count":34000,"curlScale":1.9,"emitBand":5,"lifetime":3.8},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain","beatPhase":"feedbackZoomPulse","onset":"warpAmount","flux":"fractalMorph"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}},
+{"schemaVersion":1,"id":"era-final","name":"1991-95 Final Years","eraId":6,"fractal":"warp_fbm","palette":{"stops":["#0A0710","#3D2B56","#6B4C93","#C9A8E0"],"chromaBlend":0.28,"rotateByKey":true},"feedback":{"decay":0.993,"zoom":1.0022,"rotate":0.0008,"warpAmount":0.3,"warpScale":1.7,"bassGain":1.05},"fractalParams":{"iterations":96,"escapeRadius":4.0,"orbitRadius":0.2,"beatMorph":0.35},"motifs":{"bolt":{"gain":0.5,"threshold":0.55,"forkDepth":3},"rose":{"gain":0.8,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.22,"atlas":"default","emitOn":"novelty"}},"particles":{"count":28000,"curlScale":1.2,"emitBand":4,"lifetime":4.6},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain","beatPhase":"feedbackZoomPulse","onset":"warpAmount","flux":"fractalMorph"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}},
+{"schemaVersion":1,"id":"era-unknown","name":"Unknown / Studio","eraId":7,"fractal":"warp_fbm","palette":{"stops":["#0B0D10","#2F4858","#86BBD8","#F6AE2D"],"chromaBlend":0.55,"rotateByKey":true},"feedback":{"decay":0.983,"zoom":1.0035,"rotate":0.0014,"warpAmount":0.38,"warpScale":2.2,"bassGain":1.15},"fractalParams":{"iterations":88,"escapeRadius":4.0,"orbitRadius":0.25,"beatMorph":0.5},"motifs":{"bolt":{"gain":0.75,"threshold":0.55,"forkDepth":3},"rose":{"gain":0.85,"chromaFluxThreshold":0.4,"petals":13},"glyph":{"gain":0.1,"atlas":"default","emitOn":"novelty"}},"particles":{"count":20000,"curlScale":1.7,"emitBand":5,"lifetime":3.2},"post":{"bloomThreshold":0.7,"bloomGain":0.5,"grain":0.03,"vignette":0.25},"mapping":{"sub":"feedbackZoom","bass":"warpAmount","lowMid":"fractalIterations","mid":"motifOpacity","presence":"particleEmit","air":"grain","stereoWidth":"symmetry","keyHue":"paletteRotate","novelty":"fractalMorph","percussivity":"motifGain","beatPhase":"feedbackZoomPulse","onset":"warpAmount","flux":"fractalMorph"},"safety":{"maxLuminanceDelta":0.08,"maxBrightness":0.85}}
 ];
 
 /* --- presets authored HERE, tuned against the real pipeline --------------- */
@@ -1890,6 +1904,10 @@ function resetDraw(p) {
 const MAP_TARGETS = {
   none:              function () {},
   feedbackZoom:      function (v) { D.zoom += v * 0.0055; },
+  /* Zoom with a gain sized for a TRANSIENT, not a sustained envelope. A beat pulse
+     through feedbackZoom measured a 0.4% swing - correlated at r=0.851 and invisible.
+     See MapTarget.FeedbackZoomPulse for why feedbackZoom itself was not raised. */
+  feedbackZoomPulse: function (v) { D.zoom += v * 0.012; },
   feedbackDecay:     function (v) { D.decay = Math.min(0.9995, D.decay + v * 0.006); },
   warpAmount:        function (v) { D.warpAmount *= 0.45 + 1.15 * v; },
   warpScale:         function (v) { D.warpScale *= 0.7 + 0.6 * v; },
@@ -1907,14 +1925,35 @@ const MAP_TARGETS = {
 };
 const MAP_TARGET_NAMES = Object.keys(MAP_TARGETS);
 const MAP_SOURCES = ['sub', 'bass', 'lowMid', 'mid', 'hiMid', 'presence', 'brilliance', 'air',
-  'rms', 'dynamics', 'flux', 'percussivity', 'stereoWidth', 'keyHue', 'novelty', 'centroid', 'chromaFlux'];
+  'rms', 'dynamics', 'flux', 'percussivity', 'stereoWidth', 'keyHue', 'novelty', 'centroid', 'chromaFlux',
+  /* rhythmic sources — see rhythmicShape() */
+  'beatPhase', 'barPhase', 'onset'];
+
+/* Sharpness of the beat and bar pulses. Mirrors beatPulse()/barPulse() in
+   features.glsl and RhythmicShape() in the native DrawState. */
+const BEAT_PULSE_SHARPNESS = 3.0;
+const BAR_PULSE_SHARPNESS  = 2.0;
+
+/* beatPhase and barPhase are RAMPS — 0 on the beat, climbing to 1 just before
+   the next — so routed raw they make a parameter drift up and snap back. That
+   reads as a glitch on the beat rather than a pulse on it. Shaped, they are 1
+   ON the beat and decaying.
+
+   Scaled by bpmConfidence so an untrusted grid drives nothing: below §7.3's
+   floor the DSP is synthesising beatPhase from the onset envelope, and a
+   full-strength pulse on a guessed grid is worse than no pulse. */
+function rhythmicShape(key, v) {
+  if (key === 'beatPhase') return Math.pow(1 - v, BEAT_PULSE_SHARPNESS) * F[21];
+  if (key === 'barPhase')  return Math.pow(1 - v, BAR_PULSE_SHARPNESS)  * F[21];
+  return v;
+}
 
 function applyMapping(map) {
   for (const src in map) {
     const tgt = MAP_TARGETS[map[src]];
     const f = FIELD_BY_KEY[src];
     if (!tgt || !f) continue;
-    tgt(F[f.i]);
+    tgt(rhythmicShape(src, F[f.i]));
   }
 }
 
@@ -3148,13 +3187,31 @@ function buildFeatureFrame(dt) {
 
 /* --- motif envelopes (host side, so the shaders stay stateless) ---------- */
 
+/* Tempo the fixed motif constants were authored against: 1.15 s of rose decay
+   is about a bar and a half at 104 BPM, 155 ms of bolt about a sixteenth. */
+const AUTHORED_BPM = 104.0;
+
+/* Visual decay envelopes in BEATS rather than seconds, so a pulse resolves in
+   the same musical time at any tempo. Gated on bpmConfidence and blended back
+   to the authored constant, because a beat-relative envelope on a grid the DSP
+   does not trust is a decay time derived from a guess. Mirrors
+   HostState.BeatScale() in the native host. */
+function beatScale() {
+  const bpm = F[20], conf = Math.min(Math.max(F[21], 0), 1);
+  if (bpm < 30 || conf <= 0) return 1.0;
+  const scale = Math.min(Math.max(AUTHORED_BPM / bpm, 0.5), 2.0);
+  return 1.0 + (scale - 1.0) * conf;
+}
+
 function advanceMotifs(dt) {
-  MOT.rose *= Math.exp(-dt / 1.15);
+  const beat = beatScale();
+
+  MOT.rose *= Math.exp(-dt / (1.15 * beat));
   MOT.roseCool -= dt;
   if (F[38] > D.roseThreshold && MOT.roseCool <= 0) {
     MOT.rose = 1; MOT.roseSeed = rngMotif() * 90; MOT.roseCool = 0.85;
   }
-  MOT.bolt *= Math.exp(-dt / 0.155);
+  MOT.bolt *= Math.exp(-dt / (0.155 * beat));
   MOT.boltCool -= dt;
   if (F[17] > 0.82 && F[23] > D.boltThreshold && MOT.boltCool <= 0) {
     MOT.bolt = 1; MOT.boltSeed = rngMotif() * 90; MOT.boltCool = 0.14;

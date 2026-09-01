@@ -147,4 +147,69 @@ public sealed class GateDiagnostics(ITestOutputHelper log)
         Row("arrhythmic", SignalGen.ArrhythmicClicks(20.0), 20.0, 2.0);
         Row("sustained pad", SignalGen.Sine(20.0, 220), 20.0, 0.0);
     }
+
+    /// <summary>
+    /// Does a perceptual tempo prior fix the octave, and what does it cost?
+    ///
+    /// A prior over LAG is not a function of the ACF, so it escapes the objection that kills
+    /// the harmonic sum — it can genuinely move the choice. The question this answers is
+    /// whether it can be turned up far enough to fix the ambiguous cases without breaking the
+    /// metronomic ones, which have been correct for the whole project.
+    ///
+    /// Sweeps sigma. 0 is the committed default (prior off).
+    /// </summary>
+    [Fact]
+    public void Tempo_prior_sweep()
+    {
+        double[] sigmas = [0, 0.30, 0.20, 0.15, 0.12, 0.10, 0.08];
+
+        var cases = new (string Name, double Want, Func<float[]> Make)[]
+        {
+            ("click 60",       60,  () => SignalGen.ClickTrack(20.0, 60)),
+            ("click 90",       90,  () => SignalGen.ClickTrack(20.0, 90)),
+            ("click 120",     120,  () => SignalGen.ClickTrack(20.0, 120)),
+            ("click 150",     150,  () => SignalGen.ClickTrack(20.0, 150)),
+            ("click 180",     180,  () => SignalGen.ClickTrack(20.0, 180)),
+            ("musicLike 80",   80,  () => SignalGen.MusicLike(24.0, 80)),
+            ("musicLike 88",   88,  () => SignalGen.MusicLike(24.0, 88)),
+            ("musicLike 108", 108,  () => SignalGen.MusicLike(24.0, 108)),
+        };
+
+        log.WriteLine($"{"signal",-16} {"want",5}" + string.Concat(
+            sigmas.Select(s => s == 0 ? "      off" : $"    s={s:F2}")));
+        log.WriteLine(new string('-', 16 + 6 + sigmas.Length * 9));
+
+        var broke = new List<string>();
+        var fixedUp = new List<string>();
+
+        foreach (var (name, want, make) in cases)
+        {
+            var signal = SignalGen.ToStereo(make());
+            var row = new List<string>();
+            bool offOk = false;
+
+            for (int i = 0; i < sigmas.Length; i++)
+            {
+                var a = Make();
+                a.PriorSigma = sigmas[i];
+                SignalGen.Drive(a, signal);
+
+                // "Right" means the correct OCTAVE, or untrusted enough that §7.3's fallback
+                // takes over. Sub-BPM accuracy is not what a prior changes.
+                bool onBeat = a.Bpm < want * 1.5 && a.Bpm > want * 0.62;
+                bool ok = onBeat || a.BpmConfidence < Analyzer.ConfidenceFloor;
+                if (i == 0) offOk = ok;
+                else if (offOk && !ok) broke.Add($"{name} at sigma {sigmas[i]:F2}");
+                else if (!offOk && ok) fixedUp.Add($"{name} at sigma {sigmas[i]:F2}");
+
+                row.Add($"{a.Bpm,7:F1}{(ok ? " " : "!")}");
+            }
+            log.WriteLine($"{name,-16} {want,5:F0}" + string.Concat(row.Select(c => $"{c,9}")));
+        }
+
+        log.WriteLine("");
+        log.WriteLine("  ! = wrong octave AND confident enough to drive a grid with it");
+        log.WriteLine($"  fixed by the prior: {(fixedUp.Count == 0 ? "none" : string.Join("; ", fixedUp))}");
+        log.WriteLine($"  broken by the prior: {(broke.Count == 0 ? "none" : string.Join("; ", broke))}");
+    }
 }

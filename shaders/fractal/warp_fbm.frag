@@ -57,11 +57,23 @@ void main() {
     p.x *= F_ASPECT;
 
     // Sub bass breathes the whole field in and out. Small number, large effect.
-    p *= uScale * (1.0 - 0.12 * F_SUB);
-    p = rot2(0.018 * t + 0.35 * F_STEREO_WIDTH) * p;
+    //
+    // The beat breathes it too, and this is where that belongs. It used to live in the
+    // exposure line at the bottom as a brightness pulse, which was wrong twice over: plan
+    // 12's limiter caps mean-luminance delta per frame, so a bright beat pulse gets clamped
+    // and the limiter dims the WHOLE image in response to the beat — the pulse fought the
+    // safety system and lost. Geometry is not rate-limited, and under a long feedback decay
+    // a scale pulse smears into the trails, which is how MilkDrop reads as beat-synced.
+    //
+    // NOTE, since this file is one big template literal: no backticks in shader comments.
+    // A backtick here terminates the literal and the whole script block fails to parse,
+    // which surfaces as "gl is not defined" from an unrelated block.
+    p *= uScale * (1.0 - 0.12 * F_SUB - 0.030 * beatPulse(3.0) * F_BPM_CONF);
+    p = rot2(0.018 * t + 0.35 * F_STEREO_WIDTH + 0.06 * barPulse(2.0) * F_BPM_CONF) * p;
 
     int oct = int(clamp(uOct, 2.0, 6.0));
-    float amt = uWarp * (0.65 + 1.15 * F_BASS);
+    // Transients kick the churn rather than the exposure, same reasoning.
+    float amt = uWarp * (0.65 + 1.15 * F_BASS + 0.45 * F_ONSET * F_PERCUSSIVITY);
 
     vec2 mid;
     float f = liquid(p, t, amt, oct, mid);
@@ -123,8 +135,10 @@ void main() {
          * rim * uRim * (0.50 + 1.20 * F_HIMID + 0.60 * F_BRILLIANCE);
 
     col *= mask;
-    col *= 0.45 + 0.95 * F_RMS + 0.55 * beatPulse(4.0) * F_BPM_CONF
-         + 0.65 * F_ONSET * F_PERCUSSIVITY;
+    // LEVEL drives exposure; RHYTHM drives geometry. The beat and onset terms that used to
+    // be here moved up into the field scale and the warp amount — see the note there. What
+    // is left is the loudness of the passage, which is what exposure should follow.
+    col *= 0.45 + 1.30 * F_RMS;
 
     fragColor = vec4(col * uPaint * F_INTENSITY, 1.0);
 }

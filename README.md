@@ -112,6 +112,9 @@ All four hot-reload from disk at runtime. Tune them without rebuilding.
 - [ ] **2** — WASAPI loopback + full DSP. **Gate is 3 of 4.** Flux and onset closed against
   measurement; parity re-run green; levels and the tempo octave both blocked on real
   captures that do not exist yet. See "What is verified, and what is not".
+- [x] **Motion sync** — the beat grid now drives the image. Rhythm moved out of global
+  luminance into geometry, phase fields pulse-shaped and confidence-gated, visual envelopes
+  scaled in beats. See "Motion sync" for which routes measured a real effect and which did not.
 - [ ] **3** — SMTC metadata, era mapping, song modes, now-playing caption
 - [x] **4** — Governor control loop, idle states, safety limiter with master intensity,
   budget gate green (p99 5.30 ms, zero Gen0). Soak started but never ran a full 8 hours.
@@ -163,10 +166,26 @@ frame *i*, `dt` pinned to `1/rate`, no wall clock anywhere in the path.
 
 ```powershell
 .\build.ps1                                  # the gate does not build for you
+node tools/extract-shaders.mjs --check        # shaders/ vs the harness
+node tools/extract-defaults.mjs --check       # presets/_defaults.json vs the harness
+node tools/check-presets.mjs                  # presets/eras/*.json vs the harness
 node tools/parity-gate.mjs --mode a           # dump both hosts, compare, exit nonzero on fail
 node tools/parity-gate.mjs --mode a --all-timelines
 node tools/parity-gate.mjs --mode b           # informational curve
 ```
+
+**Run the three `--check` tools before the gate.** They compare the things that exist twice —
+once embedded in `harness/index.html` and once on disk — and they fail in seconds where the
+gate takes twenty minutes to fail less informatively.
+
+`check-presets.mjs` was added after the era presets drifted and cost a full gate run. The
+motion-sync pass added four rhythmic mapping routes to `presets/eras/*.json` and not to the
+harness's embedded `ERA_PRESETS`, and the gate went from mean SSIM 1.0000 to **0.9493 with a
+min of 0.4674** — with no hint of the cause, because SSIM cannot say "your preset tables
+disagree". `compare-trace.mjs` named it in one run (`warpAmount` 0.4016 against 0.1807), which
+is why "run the trace diff first" is the documented move on a parity failure. The check now
+closes the hole the other two `--check` tools left: shaders were guarded, `PRESET_DEFAULTS` was
+guarded, and the presets themselves were not.
 
 **Everything the gate depends on lives in `tests/parity-config.json`** — the exclusions, the
 dump geometry, the thresholds, the timelines and the recorded baselines. That is deliberate:
@@ -424,24 +443,164 @@ because a per-field difference between a synthetic audio signal and a slider def
 evidence of anything.
 
 
+## Motion sync
+
+The DSP produced a beat grid from Phase 2 onward and almost nothing used it. The §10 mapping
+tables were ten smooth envelopes each — `sub`, `bass`, `lowMid`, `mid`, `presence`, `air`,
+`stereoWidth`, `keyHue`, `novelty`, `percussivity` — with no rhythmic term in any of the 13
+presets. `beatPulse()` and `barPulse()` were called, but only in places that could not carry
+the effect: a 0.0018 zoom term in `warp.frag`, against a base zoom excursion around 0.011.
+
+### Beat response goes through geometry, never luminance
+
+This is the constraint the whole layer is built around, and it is a test
+(`RhythmicRoutingTests.Beat_response_is_not_wired_into_brightness`) rather than a comment,
+because a brightness pulse on the beat looks obviously right and is self-defeating in place.
+
+`warp_fbm.frag` used to end with:
+
+```glsl
+col *= 0.45 + 0.95 * F_RMS + 0.55 * beatPulse(4.0) * F_BPM_CONF
+     + 0.65 * F_ONSET * F_PERCUSSIVITY;
+```
+
+A rhythm-driven brightness swing of up to 5.8×, applied to the global exposure. §12's limiter
+caps mean frame-luminance delta at 0.08 per frame and backs off above 3 Hz — so that pulse was
+clamped, `SafeScale` dropped, and the limiter **dimmed the whole image in response to the
+beat**. The louder the rhythm, the more the safety system fought it.
+
+The rhythmic terms moved into geometry, which is not rate-limited:
+
+```glsl
+p *= uScale * (1.0 - 0.12 * F_SUB - 0.030 * beatPulse(3.0) * F_BPM_CONF);
+p = rot2(0.018 * t + 0.35 * F_STEREO_WIDTH + 0.06 * barPulse(2.0) * F_BPM_CONF) * p;
+float amt = uWarp * (0.65 + 1.15 * F_BASS + 0.45 * F_ONSET * F_PERCUSSIVITY);
+col *= 0.45 + 1.30 * F_RMS;     // level drives exposure; rhythm drives geometry
+```
+
+Under a long feedback decay a geometric pulse smears into the trails instead of clipping, which
+is how MilkDrop reads as beat-synced. The feedback decay was **not** shortened to compensate.
+
+### Phase fields are ramps, and have to be shaped
+
+`beatPhase` is 0 **on** the beat and climbs to 1 just before the next one. Routed raw it makes
+a parameter drift up and snap back — a sawtooth, which reads as a glitch on the beat rather
+than a pulse on it. `RhythmicShape()` in the native host and `rhythmicShape()` in the harness
+convert both phase fields to `pow(1 - phase, sharpness)`, the same curve `features.glsl`
+already uses shader-side.
+
+Both are scaled by `bpmConfidence`, so **a grid the DSP does not trust drives nothing.** That
+matters more than it looks: below §7.3's floor the DSP is already synthesising `beatPhase` from
+the onset envelope, and a full-strength pulse on a guessed grid is worse than no pulse. Scaling
+rather than switching keeps the transition a fade rather than its own visible event. It also
+gives a free A/B — zeroing the `bpmConf` column of a timeline disables the entire rhythm layer
+and changes nothing else, which is how `captures/ab/` is built.
+
+### Which routes worked
+
+Measured with `tools/rhythm-depth.mjs`, which correlates each traced draw scalar against the
+shaped drive that is supposed to be moving it. `era-europe72` over the 60 s budget timeline,
+3600 frames, `bpmConf` mean 0.880:
+
+| route | parameter | swing above baseline | depth | corr | |
+|---|---|---|---|---|---|
+| `onset → warpAmount` | warpAmount | 0.195 → 0.536 | 103% | 0.917 | **works** |
+| `beatPhase → feedbackZoomPulse` | zoom | 0.0068 → 0.0152 | 83% | 0.962 | **works** |
+| `flux → fractalMorph` | beatMorph | 0.380 → 0.765 | 72% | 0.380 | works |
+| `flux → fractalMorph` | cells | 3.60 → 5.61 | 45% | 0.429 | works |
+| `barPhase → paletteRotate` | palRot | 56.6 → 1367.6 | 182% | **−0.028** | **retired** |
+
+`onset → warpAmount` is the strongest: the churn more than doubles on a transient and tracks
+it at r = 0.917.
+
+`beatPhase` needed a new target. Routed through the existing `feedbackZoom` it moved zoom from
+1.0067 to 1.0111 — a 0.4% swing, correlated at r = 0.851 and invisible, because that target's
+gain (0.0055) is sized for a band sitting near 0.5 all the time and a pulse is only high for a
+fraction of a beat. `feedbackZoomPulse` uses 0.012, putting it alongside `warp.frag`'s own
+sub-bass term rather than a fifth of it. Raising `feedbackZoom` instead would have changed the
+authored bass response of all 13 presets to buy one route.
+
+`flux → fractalMorph` works but correlates only moderately, because `novelty` already writes
+that target. Worth knowing while you are there: `novelty` sits at p50 0.039, and
+`fractalMorph` applies `beatMorph *= 0.6 + 0.9v`, so the existing `novelty → fractalMorph`
+route is a near-constant 0.64 multiplier — it is suppressing morph, not modulating it.
+
+`barPhase → paletteRotate` was **removed rather than left in place**. `paletteRotate` does
+`palRot += v` and `palRot` accumulates without bound — `keyHue` drives it to the hundreds
+within seconds, so a bar pulse peaking at 1.0 is noise against it, and r = −0.028 says exactly
+that. A dead route in a config file is a trap for whoever reads it next. Making it work means
+changing `paletteRotate` from a rate into a position, which moves every authored palette
+behaviour and should be done deliberately against real captures.
+
+### Beat-relative time constants
+
+Visual decay envelopes scale by `60/BPM` rather than sitting at fixed seconds, so a pulse
+resolves in the same musical time at any tempo. A fixed 155 ms bolt tail is long gone before
+the next beat at 80 BPM and still visible when it lands at 170.
+
+`HostState.BeatScale()` — mirrored as `beatScale()` in the harness — returns the factor, and
+two properties matter:
+
+- **Clamped to [0.5, 2.0].** A bad tempo reading must not turn a 155 ms tail into something
+  measured in seconds.
+- **Blended by confidence back to the authored constant.** A beat-relative envelope on a grid
+  the DSP does not trust is a decay time derived from a guess. At zero confidence, tempo has no
+  effect at all — asserted, because that is the property that makes it safe.
+
+The reference tempo is 104 BPM: 1.15 s of rose decay is about a bar and a half there, and
+155 ms of bolt about a sixteenth, which is what the fixed constants were authored against.
+
+### Seeing it, and the A/B that proves it
+
+```powershell
+.\scripts\capture-rhythm-ab.ps1 -Preset era-terrapin -Frames 90 -Stride 3
+```
+
+The control is not a second build. Everything derived from the beat grid is scaled by
+`bpmConfidence` — the phase routes through `RhythmicShape`, and `warp_fbm`'s own scale and
+rotation pulses through `F_BPM_CONF` — so a timeline with its `bpmConf` column zeroed turns all
+of it off and changes nothing else. Same features, same presets, same shaders, same binary.
+
+Rendered over 90 frames of the 124 BPM timeline, `era-terrapin`, rhythm-on against rhythm-off:
+
+| | |
+|---|---|
+| SSIM mean | 0.8521 |
+| SSIM min | **0.3102** |
+| divergence peaks | frames 3, 45, 75 — **30 frames apart** |
+
+A beat at 124 BPM is 29 frames. The two renders diverge most on a beat-period cadence and
+re-converge between beats, which is what beat sync looks like measured rather than described.
+Frames land in `captures/ab/rhythm-on` and `captures/ab/rhythm-off`.
+
+It isolates the grid-derived response **specifically, not the whole rhythm layer**, and the
+difference is deliberate: `onset → warpAmount` and `flux → fractalMorph` are not
+confidence-gated, because they read features directly rather than a grid. Measured, they come
+out bit-identical across the A/B — only `zoom` moves, depth 76% → 5% and correlation with the
+beat 0.999 → 0.025. That is the property worth having: in a free-time passage where the
+tracker gives up, the churn and the morph keep responding to the audio and only the grid
+stops.
+
 ### What is verified, and what is not
 
 **The Phase 2 gate is 3 of 4.** Tempo is the open item, and it is open for a specific,
 recorded reason — see "Still open". This phase is not complete and is not tagged as such.
 
-101 tests green, 1 skipped and documented. Tempo lock at 60/90/120/132/150/180 BPM; a click
+111 tests green, 1 skipped and documented. Tempo lock at 60/90/120/132/150/180 BPM; a click
 track drifting ±8% over 60 s tracked within 2 BPM after converging in 0.94 s; the
 `bpmConfidence < 0.35` fallback engaging on 100% of frames of arrhythmic material with beat
 phase anti-correlating at r = −1.000 with the onset envelope; key detection on five triads;
-band isolation at three sample rates; a real capture replaying in the harness.
+band isolation at three sample rates; a real capture replaying in the harness; and the rhythm
+layer's pulse shaping, confidence gating, envelope clamping and geometry-not-luminance
+constraint each asserted rather than described.
 
-**Cross-host parity, mode A** — 2026-08-31, after the flux, octave, onset and composite
-changes, across all three committed timelines:
+**Cross-host parity, mode A** — 2026-09-01, after the flux, octave, onset, composite and
+motion-sync changes, across all three committed timelines:
 
 | Timeline | Frames | Mean | Min | |
 |---|---|---|---|---|
 | `timeline-20s` | 780 | 1.0000 | 0.9998 | pass |
-| `timeline-novelty` | 780 | 1.0000 | 0.9995 | pass |
+| `timeline-novelty` | 780 | 1.0000 | 0.9982 | pass |
 | `timeline-real-20s` | 1222 | 0.9999 | 0.9977 | pass |
 
 `timeline-real-20s` was **regenerated** after the onset fix, because its F_ONSET column was
@@ -578,6 +737,27 @@ bytes stepped 78.0 → 89.4 MB at 5 min and → 116.8 MB at 15 min, then sat at 
 117.2 over the next three reports. Handles flat at ~502. **Gen0 = 1 for the whole run.** That
 step pattern is the GL driver allocating lazily, and it is why the drift verdict is graded
 from a baseline latched at 20 minutes rather than from process start.
+
+**5. The tempo prior does not rescue the octave, and the measurement says why.** A prior over
+lag is not a function of the ACF, so unlike a harmonic sum it *can* move the choice —
+`Analyzer.PriorSigma` implements `acf[lag] · P(lag)` with `P` log-normal in BPM around 120, and
+`GateDiagnostics.Tempo_prior_sweep` sweeps it. Committed at sigma 0, i.e. off:
+
+| sigma | click 60 | click 90 | click 150 | click 180 | ML 80 | ML 88 |
+|---|---|---|---|---|---|---|
+| off | 60.0 | 90.2 | 148.8 | 180.0 | 158.4 ✗ | 176.7 ✗ |
+| 0.15 | 70.3 | 97.0 | 144.2 | 180.0 | 152.0 ✗ | 176.9 ✗ |
+| 0.12 | 71.2 | 100.4 | 140.6 | **93.8 ✗** | 148.0 ✗ | 180.0 |
+| 0.10 | 72.1 | 104.2 | 137.2 | 95.3 ✗ | 144.2 ✗ | **93.8 ✓** |
+
+It **breaks the 180 BPM click track at sigma 0.12, before it fixes 88 BPM at 0.10** — and
+metronomic accuracy is already degrading well above that (60 BPM reads 70.3 at sigma 0.15).
+Working backwards from the flip point gives the useful number: the prior needs a 12.6× ratio
+to win, so `acf[beat]` is under **12% of `acf[subdivision]`** on `MusicLike`. The beat is very
+nearly absent from that fixture's onset envelope, which is a property of the fixture rather
+than of the tracker — real material with a kick on the beat should have a strong peak there.
+That is the same conclusion the comb reached from the other direction, and the same instrument
+settles both: record `tight-backbeat` and re-run the sweep alongside the comb re-fit.
 
 ## Non-negotiables
 
