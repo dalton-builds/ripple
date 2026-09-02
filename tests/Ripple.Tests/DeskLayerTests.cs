@@ -422,6 +422,55 @@ public sealed class DeskLayerTests(ITestOutputHelper log)
         finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
     }
 
+    /// <summary>
+    /// Phase 3's metadata block round-trips, and its defaults are the ones the phase wants:
+    /// metadata and the caption on, and AUTO-CAPTURE ON — the whole point of which is that
+    /// fixtures accumulate without anyone deciding to make one.
+    /// </summary>
+    [Fact]
+    public void Metadata_config_round_trips_with_phase_three_defaults()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), $"ripple-{Guid.NewGuid():N}");
+        string path = Path.Combine(dir, "config.json");
+        try
+        {
+            var a = RippleConfig.LoadOrCreate(path);
+            Assert.True(a.Metadata, "metadata should default on");
+            Assert.True(a.Caption, "caption should default on");
+            Assert.True(a.AutoCapture, "auto-capture should default on during Phase 3");
+            Assert.Equal(60, a.AutoCaptureSeconds);
+
+            log.WriteLine(File.ReadAllText(path));
+
+            var b = RippleConfig.LoadOrCreate(path);
+            Assert.Equal(a.Metadata, b.Metadata);
+            Assert.Equal(a.Caption, b.Caption);
+            Assert.Equal(a.AutoCapture, b.AutoCapture);
+            Assert.Equal(a.AutoCaptureSeconds, b.AutoCaptureSeconds);
+            Assert.Equal(a.AutoCaptureCapMb, b.AutoCaptureCapMb);
+        }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
+    }
+
+    /// <summary>Turning metadata off is a supported state, not a degraded one.</summary>
+    [Fact]
+    public void Metadata_can_be_turned_off()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"ripple-cfg-{Guid.NewGuid():N}.json");
+        File.WriteAllText(path, """
+            { "metadata": { "enabled": false, "autoCapture": false } }
+            """);
+        try
+        {
+            var cfg = RippleConfig.LoadOrCreate(path);
+            Assert.False(cfg.Metadata);
+            Assert.False(cfg.AutoCapture);
+            // Unmentioned metadata keys keep their defaults.
+            Assert.True(cfg.Caption);
+        }
+        finally { File.Delete(path); }
+    }
+
     /// <summary>A missing file and an unwritable path must both still yield a usable config.</summary>
     [Fact]
     public void Config_never_throws()

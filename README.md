@@ -115,13 +115,14 @@ All four hot-reload from disk at runtime. Tune them without rebuilding.
 - [x] **Motion sync** — the beat grid now drives the image. Rhythm moved out of global
   luminance into geometry, phase fields pulse-shaped and confidence-gated, visual envelopes
   scaled in beats. See "Motion sync" for which routes measured a real effect and which did not.
-- [ ] **3** — SMTC metadata, era mapping, song modes, now-playing caption
+- [~] **3** — SMTC behind `IMetadataSource`, §9.2 parsing, era mapping, song modes, the
+  now-playing caption, and **auto-capture** so fixtures accumulate from listening. Built and
+  unit-tested; the parts that need a human playing Spotify are listed under "What is verified".
 - [x] **4** — Governor control loop, idle states, safety limiter with master intensity,
-  budget gate green (p99 5.30 ms, zero Gen0). Soak started but never ran a full 8 hours.
-- [~] **5** — Desk-prototype slice done and tagged `prototype-v1`: borderless window with
-  remembered geometry, always-on-top, fullscreen per monitor, global hotkeys, tray icon,
-  hot-reloaded config, graceful fractal fallback. Packaging and the full preset library
-  are still open.
+  budget gate green (p99 5.11 ms, zero Gen0). Soak started but never ran a full 8 hours.
+- [~] **5** — Desk-prototype slice tagged `prototype-v1`, plus the **standalone build**:
+  single-file self-contained publish, verified running on a clean path with no SDK. The full
+  preset library is still open.
 
 Do not proceed past a failed gate. Gate 1 (cross-host parity) validates the entire
 shared-shader architecture; if it fails, fix the contract rather than forking the shaders.
@@ -169,12 +170,27 @@ frame *i*, `dt` pinned to `1/rate`, no wall clock anywhere in the path.
 node tools/extract-shaders.mjs --check        # shaders/ vs the harness
 node tools/extract-defaults.mjs --check       # presets/_defaults.json vs the harness
 node tools/check-presets.mjs                  # presets/eras/*.json vs the harness
+node tools/check-harness.mjs                  # does the harness still run at all?
 node tools/parity-gate.mjs --mode a           # dump both hosts, compare, exit nonzero on fail
 node tools/parity-gate.mjs --mode a --all-timelines
 node tools/parity-gate.mjs --mode b           # informational curve
 ```
 
-**Run the three `--check` tools before the gate.** They compare the things that exist twice —
+`check-harness.mjs` answers a different question from the other three: not "do the two copies
+agree" but **"does the harness still run at all"**. It loads the page in headless Chrome, fails
+on any uncaught exception or console error, and pushes every mapping source named by any preset
+through `rhythmicShape`. It exists because the harness has now been broken twice by careless
+text edits, each time in a way no static check caught — a backtick inside a shader comment
+terminated the template literal and surfaced as `ReferenceError: gl is not defined` from an
+unrelated block, and a quoting accident turned `key === 'barPhase'` into `key === barPhase`,
+which parses fine and throws only when a preset routes that source. Both were found by the
+parity gate, twenty minutes and one unhelpful "harness dump failed" later.
+
+One detail in it is load-bearing: it navigates to the page **after** attaching the debugger,
+rather than passing the URL on Chrome's command line. Boot-time exceptions thrown before
+`Runtime.enable` are never reported, which is exactly the class of failure it exists to catch.
+
+**Run the four `--check` tools before the gate.** They compare the things that exist twice —
 once embedded in `harness/index.html` and once on disk — and they fail in seconds where the
 gate takes twenty minutes to fail less informatively.
 
@@ -424,6 +440,190 @@ Every one of these came out of a measurement, and the measurement is in the code
 next to it:
 
 | §7 says | Built as | Because |
+## Dead intelligence layer
+
+§9. What makes it a talking point rather than a screensaver: the machine demonstrably
+understands what it is listening to.
+
+### Auto-capture — fixtures as a byproduct
+
+The five fixtures §14 depends on blocked three development cycles, and the reason was never
+technical. Capturing one was a separate deliberate act: stop, run a wrapper, play the right
+thing for sixty seconds, check the take. Nobody does that spontaneously, so it never happened,
+and the tempo octave and the per-band gamma stayed unresolvable for want of material that
+ordinary listening would have produced by the dozen.
+
+Testing SMTC means playing Spotify anyway, so every track change is already a capture
+opportunity. On a new track while playing, Ripple records 60 s of Feature Frames named and
+labelled from the metadata:
+
+```
+tests/fixtures/real/auto/grateful-dead-dark-star-live-dead.json
+```
+
+Four rules keep it from being a nuisance, and each is a decision rather than a default:
+
+- **never twice** — the slug includes the album, so the same song on two releases is two
+  captures because it is genuinely two pieces of material;
+- **a total disk cap** (200 MB by default) that **stops cleanly rather than pruning**. These
+  are regression baselines; deleting someone's fixture to make room for a new one is the
+  opposite of what they are for;
+- **only while playing**, so a paused track does not record a minute of silence;
+- **a pause mid-capture abandons it.** A partial capture is worse than none — it sits in the
+  fixture folder looking like a valid baseline while being twelve seconds of one chorus.
+
+`metadata.autoCapture` in the config, **on by default during this phase**. Turn it off once
+there are enough. Outside a repo tree, captures land in `%APPDATA%\Ripple\captures\auto`.
+
+### SMTC
+
+`Windows.Media.Control`, session filtered to Spotify by `SourceAppUserModelId` — matched as a
+substring, so the desktop build (`Spotify.exe`) and the Store build
+(`SpotifyAB.SpotifyMusic_…!Spotify`) both hit. Subscribed to `MediaPropertiesChanged` and
+`PlaybackInfoChanged`, **plus a 2 s poll**.
+
+The poll is not a belt-and-braces afterthought, it is the mechanism: §9.1 says SMTC events are
+occasionally missed and they are. The events are treated as a latency optimisation over the
+poll, and both handlers do nothing but wake the loop. Everything works with the events deleted;
+they only make it feel instant.
+
+Three properties of the API shape the implementation:
+
+- **it is async and WinRT, and the render thread is neither.** Every call goes through a
+  bounded wait on a background thread and the result is latched into a field the renderer
+  reads. The render thread never awaits;
+- **it can fail to load entirely** — a machine without the projection, or a sandbox. That must
+  be indistinguishable from "nothing is playing";
+- **a session can vanish mid-call.** One bad tick must not end the thread.
+
+All of it sits behind `IMetadataSource`, and `NullMetadataSource` is a first-class
+implementation rather than a test double: it is what runs when SMTC is unavailable, when the
+user turns metadata off, and when the projection throws. **Metadata failure never takes down
+rendering** is enforced structurally — every field nullable, every entry point guarded.
+
+**Pause is instant.** §11's idle is RMS-based and needs three seconds of silence to conclude
+anything; `PlaybackStatus == Paused` reaches the same conclusion immediately. The difference
+is between "it noticed" and "it reacted".
+
+### Parsing
+
+`TrackParser` is a **pure function of three strings** plus the venue book — no SMTC types, no
+GL, no clock. That is deliberate: it is the only part of Phase 3 testable without playing
+music, and it is where a wrong answer is most expensive. `TrackParserTests` runs it against a
+fixture list of real Spotify strings, including the messy ones.
+
+**The governing rule is that a failure degrades, never guesses.** A wrong date picks a wrong
+era, and someone who knows the catalogue sees a 1972 palette on a 1989 show. So every
+extraction may return nothing, and nothing is a fully supported state.
+
+| | |
+|---|---|
+| artist gate | the extended family, matched as a normalized substring — and a **not-family list checked first**, because "Dead Kennedys", "Dead Can Dance" and "deadmau5" all pass a naive test and the gate exists precisely to keep them out |
+| dates | ISO, M/D/YY, `'72`, bare year — album before title, because the release carries the show and a title that happens to contain a year is weaker evidence |
+| series | Dick's Picks, Dave's Picks, Road Trips, the Vault releases, Cornell — **kept in `data/venues.json`, not in code**, per §9.2 |
+| normalization | strips `- Live at …`, `[Live]`, `(2013 Remaster)`, `Pt. 1`, trailing dates |
+| segues | `>` and `->` split; the first song drives the preset, the rest are recorded |
+
+Two normalization details that were bugs first: **apostrophes are deleted, not replaced with a
+space** — "Franklin's Tower" has to reach `franklins tower` to match `data/songs.json`, and
+`franklin s tower` matches nothing — and **`&` becomes "and"**, or `Dead & Company` never
+reaches the family list.
+
+A parsed date always beats a series' default date, so `Dick's Picks Vol. 8: 1970-05-02` uses
+the real show rather than the series.
+
+### The caption
+
+§8.5's one piece of chrome that makes a passerby stop. Fades in over 8 s, bottom-left:
+
+```
+Dark Star · Grateful Dead · Veneta, OR · 8/27/72
+```
+
+Its whole job is to be **read from three feet**, which drives every decision. A real system UI
+face at 15 px, hinted — §8.5 is explicit that a psychedelic display face defeats the purpose,
+because an unreadable caption conveys nothing. A soft dark shadow underneath, because what is
+behind it is a high-contrast animated fractal and white-on-anything is otherwise a coin flip.
+And **drawn after the composite**, so it is never part of the luminance §12's limiter measures
+— chrome that could make the picture flicker would be a safety violation caused by decoration.
+
+Legibility is a length constraint before it is a typography one, and that is a test. Built from
+the raw title the caption came out at 140 characters with the venue and the date in it twice:
+
+```
+Dark Star - Live at Old Renaissance Faire Grounds, Veneta, OR, 8/27/72 · Grateful Dead ·
+Old Renaissance Faire Grounds, Veneta OR · 8/27/72
+```
+
+So the title is cleaned for display separately from the song-mode key, and the venue is
+shortened to its town — `Barton Hall, Cornell University, Ithaca NY` → `Ithaca, NY`. A bare
+year never appears: a year parsed off a studio album is not a show date, and printing `· 1970`
+beside a song title implies a precision that is not there.
+
+### Three-tier degradation
+
+§9.4's chain is the gate, not a fallback path. Each tier has to look intentional alone:
+
+| tier | when | result |
+|---|---|---|
+| **song mode** | title matches `data/songs.json` | mode merged recursively over its era |
+| **era** | a date parsed | one of `presets/eras/` |
+| **audio-only** | neither, or not the family | `era-unknown`, driven entirely by the DSP |
+
+Merge order is CONTRACTS §4 and is not negotiable: **era → song mode → user config → governor
+clamp**, governor last and absolute. A song mode is a *partial* override — a mode naming only
+`feedback.decay` keeps every other authored value, which is what lets `data/songs.json` be 20
+lines instead of 20 full presets. "User config" includes the preset lock: someone who pressed
+`L` has said what they want, and metadata does not overrule it (the caption still shows, because
+the lock is about the look).
+
+Measured on the three cases §9.4 names:
+
+```
+live    era=2  date=1972-08-27  song='dark star'  Dark Star · Grateful Dead · Veneta, OR · 8/27/72
+studio  era=7  date=none        song='ripple'     Ripple · Grateful Dead
+other   era=7  date=none        song=''           Ripple · Some Other Band
+```
+
+Three different, intentional states — and the third is the one the artist gate earns: same
+title, same year in the album, and it correctly refuses to treat it as a Dead show.
+
+### `tempoLock` is provisional
+
+Song modes with `"tempoLock": true` — `drums` is the shipped one — inherit the **unresolved
+tempo octave**. The tracker currently reports the subdivision confidently on dense material, so
+a mode that locks to the grid locks to a grid that may be 2× wrong. Implemented as specified,
+flagged here, and revisit once the auto-captures validate the tracker.
+
+**Beat-relative time constants carry the same caveat.** They are implemented (`HostState.
+BeatScale`, `60/BPM`, clamped to [0.5, 2.0], blended by confidence) and they were shipped in the
+motion-sync pass — but the confidence blend only protects against a grid the tracker *distrusts*,
+and the open bug is a grid it is confident and wrong about. Same fix closes both.
+
+### Standalone build
+
+```powershell
+.\build.ps1 -Publish
+```
+
+Single-file, self-contained, win-x64, ReadyToRun, **no trimming and no `PublishAot`** — CsWinRT
+plus AOT is a known hazard and the footprint is already inside budget. Output is one exe plus
+`glfw3.dll` and loose `shaders/`, `presets/`, `data/` folders, which stay loose so they keep
+hot-reloading.
+
+Two things cost a publish cycle each, and both only reproduce in a published build:
+
+- **`IncludeNativeLibrariesForSelfExtract` must be `false`.** Bundled natives are extracted to a
+  temp directory that Silk.NET's own resolver does not search, and the exe dies with
+  `PlatformNotSupportedException: Couldn't find a suitable window platform (GlfwPlatform - not
+  applicable)` while the identical build run from `bin/` works — because `bin/` has `glfw3.dll`
+  sitting beside it;
+- **the GLFW platform is registered explicitly.** Silk.NET discovers its backend by scanning
+  loaded assemblies, and that scan does not survive single-file bundling.
+
+Verified by copying the publish folder to a directory outside the repo and running it with a
+bare `C:\Windows\system32` PATH and no `DOTNET_ROOT`.
+
 |---|---|---|
 | `confidence = peak / mean(acf)` | Peak of the **mean-removed, variance-normalized** autocorrelation | The ratio is tempo-biased: identical metronomes scored 3.62 at 60 BPM and 1.28 at 180, with no threshold able to accept 180 without also accepting arrhythmic clicks. As a correlation coefficient, click tracks land at 0.84–0.96 flat across the range and free time at 0.07. |
 | BPM median over 8 s | 2 s | With the 4 s autocorrelation window, 8 s put the estimate ~7 s behind a drifting tempo — 3.16 BPM against §14's own ±2 BPM requirement. The two numbers are in tension and the drift case is the Dead case. |
@@ -586,13 +786,34 @@ stops.
 **The Phase 2 gate is 3 of 4.** Tempo is the open item, and it is open for a specific,
 recorded reason — see "Still open". This phase is not complete and is not tagged as such.
 
-111 tests green, 1 skipped and documented. Tempo lock at 60/90/120/132/150/180 BPM; a click
+193 tests green, 1 skipped and documented. Tempo lock at 60/90/120/132/150/180 BPM; a click
 track drifting ±8% over 60 s tracked within 2 BPM after converging in 0.94 s; the
 `bpmConfidence < 0.35` fallback engaging on 100% of frames of arrhythmic material with beat
 phase anti-correlating at r = −1.000 with the onset envelope; key detection on five triads;
-band isolation at three sample rates; a real capture replaying in the harness; and the rhythm
+band isolation at three sample rates; a real capture replaying in the harness; the rhythm
 layer's pulse shaping, confidence gating, envelope clamping and geometry-not-luminance
-constraint each asserted rather than described.
+constraint each asserted rather than described; and §9.2's parsing against a fixture list of
+real Spotify strings, including the ones that must produce **no** date.
+
+**Standalone build**, verified: the publish folder copied outside the repo and run with a bare
+`C:\Windows\system32` PATH and no `DOTNET_ROOT` comes up fully — GL, audio, hotkeys, config,
+auto-capture and SMTC all start. One exe (197 MB), `glfw3.dll`, and loose `shaders/`,
+`presets/`, `data/`.
+
+**What Phase 3 still needs a human for.** Everything below the parser is built and wired, but
+four of the six gate items need someone playing Spotify, and I have not been able to run them:
+
+- three tracks — a dated live release, a studio album, a non-Dead track — giving three visibly
+  different, intentional results **on screen**. The three-tier logic is asserted in
+  `TrackParserTests`, but "looks intentional" is a judgement made by eye;
+- the caption showing the correct show date and venue on a dated release;
+- SMTC actually attaching to a live Spotify session. The session filter, the event plumbing and
+  the 2 s poll are exercised only against their own logic here, not against Spotify;
+- **auto-capture producing at least three real fixtures.** `tests/fixtures/real/auto/` is empty,
+  because nothing has played yet.
+
+Metadata-unavailable is verified: the app runs fully with `metadata.enabled: false`, and the
+null source is the same code path a failed SMTC load takes.
 
 **Cross-host parity, mode A** — 2026-09-01, after the flux, octave, onset, composite and
 motion-sync changes, across all three committed timelines:
@@ -670,6 +891,21 @@ stronger hit still breaks through sooner.
 **No real captures exist.** `tests/fixtures/real/` contains its README and nothing else. The
 five the plan designates — `tight-backbeat`, `drifting-jam`, `free-time`, `quiet-dynamic`,
 `modern-loud` — have never been recorded, and four things are blocked on them.
+
+**0. The captures are now self-serving, which is the point.** Auto-capture is on by default and
+records a fixture on every new track. The two items below have blocked four cycles between them
+and both need the same thing — real material — so the fastest route to closing them is to leave
+Ripple running while you listen for an afternoon, then:
+
+```powershell
+node tools/timeline-stats.mjs tests\fixtures\real\auto\*.json     # is the take usable
+node tools/fit-band-gamma.mjs tests\fixtures\real\auto\<one>.json # per-band exponents
+```
+
+The specific question for the octave is whether `acf[beat]` is still under 12% of
+`acf[subdivision]` on real drums. On `MusicLike` it is, and that is a property of the fixture:
+real kick-on-the-beat material should invert it. For the gamma, the question is whether two
+real captures agree within something much better than the 4.6× that two synthetic proxies did.
 
 **1. Tempo octave on dense material — and the Phase 4 "fix" was not real.**
 

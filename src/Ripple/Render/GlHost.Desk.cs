@@ -615,5 +615,9 @@ public sealed partial class GlHost
             + $"{_idle.Current} dim {_idle.Dim:0.00} · intensity {_intensity:0.00} · "
             + $"limiter {_host.SafeScale:0.000} flash {_host.FlashRate:0.0} Hz · "
             + $"ws {Environment.WorkingSet / (1024 * 1024)} MB");
+
+        // §8.5's diagnostic readout is what turns "nice screensaver" into "wait, it is
+        // analyzing it": the metadata tier and the detected show are the interesting half.
+        if (_meta is not null) Console.WriteLine($"[hud] {MetaStatus()}");
     }
 }

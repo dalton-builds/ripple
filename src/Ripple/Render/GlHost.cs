@@ -101,6 +101,8 @@ public sealed partial class GlHost : IDisposable
 
     public void Run()
     {
+        RegisterWindowPlatform();
+
         var api = new GraphicsAPI(ContextAPI.OpenGL, ContextProfile.Core,
             ContextFlags.ForwardCompatible, new APIVersion(4, 3));
 
@@ -121,6 +123,35 @@ public sealed partial class GlHost : IDisposable
         _window.FramebufferResize += OnFramebufferResize;
         _window.Closing += OnClosing;
         _window.Run();
+    }
+
+    /// <summary>
+    /// Register the GLFW windowing and input backends EXPLICITLY.
+    ///
+    /// Silk.NET normally discovers its platform by scanning loaded assemblies, and that scan
+    /// does not survive a single-file publish: the assemblies are inside the bundle rather
+    /// than beside the exe, nothing has forced them to load by the time `Window.Create` runs,
+    /// and the failure is `PlatformNotSupportedException: Couldn't find a suitable window
+    /// platform (GlfwPlatform - not applicable)` — from a build that works perfectly when run
+    /// from `bin/`. It cost a full publish cycle to find, because it cannot reproduce in
+    /// development.
+    ///
+    /// Calling the registrars takes a hard reference to both backends, so they are in the
+    /// bundle and registered before anything asks. Harmless when running non-published:
+    /// registration is idempotent.
+    /// </summary>
+    private static void RegisterWindowPlatform()
+    {
+        try
+        {
+            Silk.NET.Windowing.Glfw.GlfwWindowing.RegisterPlatform();
+            Silk.NET.Input.Glfw.GlfwInput.RegisterPlatform();
+        }
+        catch (Exception ex)
+        {
+            // If this throws, Window.Create is about to give a much better message.
+            Console.Error.WriteLine($"[gl] platform registration: {ex.Message}");
+        }
     }
 
     private void OnLoad()
@@ -217,6 +248,7 @@ public sealed partial class GlHost : IDisposable
         else
         {
             StartDeskLayer();
+            StartMetadata();
         }
 
         Console.WriteLine($"[ripple] {_preset.Id} · {_chain.ResolvedFamily} · {_opt.Width}x{_opt.Height} @ {_renderScale:0.##}x");
@@ -224,7 +256,9 @@ public sealed partial class GlHost : IDisposable
 
     private void OnClosing()
     {
-        // The desk layer first: it owns the geometry save, and saving it after the window is
+        StopMetadata();
+
+        // The desk layer next: it owns the geometry save, and saving it after the window is
         // torn down reads back a destroyed HWND and persists zeros.
         StopDeskLayer();
 
@@ -291,10 +325,18 @@ public sealed partial class GlHost : IDisposable
         return 0;
     }
 
-    private void SelectPreset(int index)
+    /// <summary>
+    /// Select a preset, optionally with a song mode merged over it.
+    ///
+    /// <paramref name="songMode"/> null means "whatever the command line asked for", which is
+    /// the Phase 1 behaviour and what every non-metadata caller wants. The metadata layer
+    /// passes an explicit key — including explicitly none, when a track has no mode — so it
+    /// can clear a previous track's mode rather than leaving it applied.
+    /// </summary>
+    private void SelectPreset(int index, string? songMode = null)
     {
         _presetIndex = Math.Clamp(index, 0, _presets.Library.Count - 1);
-        _preset = _presets.Resolve(_presetIndex, _opt.Song);
+        _preset = _presets.Resolve(_presetIndex, songMode ?? _opt.Song);
         _palette.Build(_preset.PaletteStops);
         // The era id rides in the Feature Frame so shaders can branch on it.
         // On timeline replay the recorded value wins, exactly as in the harness.
@@ -515,6 +557,11 @@ public sealed partial class GlHost : IDisposable
         _hotkeys?.Drain(DoAction);
         _tray?.Drain(OnTrayCommand);
 
+        // Track changes are picked up here, before dt exists, because a new track may change
+        // the preset and that has to happen before the frame is built. The caption's own
+        // clock advances later, with the real dt.
+        PollMetadata();
+
         double dt;
         if (_timeline is not null && _opt.Step)
         {
@@ -544,6 +591,10 @@ public sealed partial class GlHost : IDisposable
             _host.MeasureLuminance(_gl, _chain.Targets, dt * 3, _tSec, _draw);
 
         _chain.Present(_window.FramebufferSize.X, _window.FramebufferSize.Y);
+
+        // AFTER the composite blit, so chrome is never part of the luminance §12 measures.
+        _caption?.Advance(dt);
+        _caption?.Draw(_window.FramebufferSize.X, _window.FramebufferSize.Y);
 
         _lastFrameMs = System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
 
@@ -578,7 +629,10 @@ public sealed partial class GlHost : IDisposable
     private bool PumpIdleState(double dt)
     {
         bool visible = _visible && !WindowChrome.IsMinimized(_hwnd);
-        bool audioIdle = _audio?.Idle ?? false;
+        // SMTC pause is INSTANT; §11's RMS idle needs three seconds of silence to reach the
+        // same conclusion. When metadata says paused there is nothing to wait for, and the
+        // difference between the two is the difference between "it noticed" and "it reacted".
+        bool audioIdle = (_audio?.Idle ?? false) || _metaPaused;
 
         bool draw = _idle.ShouldRender(dt, audioIdle, visible);
         _host.IdleDim = _idle.Dim;

@@ -1934,6 +1934,13 @@ const MAP_SOURCES = ['sub', 'bass', 'lowMid', 'mid', 'hiMid', 'presence', 'brill
 const BEAT_PULSE_SHARPNESS = 3.0;
 const BAR_PULSE_SHARPNESS  = 2.0;
 
+/* Novelty is a SPIKE field, not a 0..1 envelope. Measured on the real capture:
+   p50 0.039, p90 0.156, p99 0.319, max 0.430 — so fractalMorph beatMorph *= 0.6 +
+   0.9v multiplied morph by 0.635 at the median and never reached 1.0 at all. A
+   permanent suppressor wearing the costume of a modulator, in all eight era
+   presets. 0.35 is just under the observed p99. Mirrors NoveltyCeiling. */
+const NOVELTY_CEILING = 0.35;
+
 /* beatPhase and barPhase are RAMPS — 0 on the beat, climbing to 1 just before
    the next — so routed raw they make a parameter drift up and snap back. That
    reads as a glitch on the beat rather than a pulse on it. Shaped, they are 1
@@ -1945,6 +1952,7 @@ const BAR_PULSE_SHARPNESS  = 2.0;
 function rhythmicShape(key, v) {
   if (key === 'beatPhase') return Math.pow(1 - v, BEAT_PULSE_SHARPNESS) * F[21];
   if (key === 'barPhase')  return Math.pow(1 - v, BAR_PULSE_SHARPNESS)  * F[21];
+  if (key === 'novelty')   return Math.min(Math.max(v / NOVELTY_CEILING, 0), 1);
   return v;
 }
 

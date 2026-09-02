@@ -73,6 +73,26 @@ public sealed class RippleConfig
     /// <summary>Floor on how often novelty may advance, so a busy passage cannot strobe presets.</summary>
     public double MinSecondsBetweenAdvances = 45;
 
+    // --- metadata (Phase 3) -------------------------------------------------
+    /// <summary>SMTC. Off means the app runs fully audio-only, which is a supported state.</summary>
+    public bool Metadata = true;
+
+    /// <summary>§8.5's now-playing caption.</summary>
+    public bool Caption = true;
+
+    /// <summary>
+    /// Record a fixture on every new track. ON BY DEFAULT DURING PHASE 3, deliberately.
+    ///
+    /// The five fixtures §14 needs blocked three cycles because capturing was a separate
+    /// ritual nobody performed. Testing SMTC means playing music anyway, so this turns
+    /// listening into fixtures. Turn it off once there are enough.
+    /// </summary>
+    public bool AutoCapture = true;
+    public double AutoCaptureSeconds = 60;
+
+    /// <summary>Total cap across the auto-capture folder. Stops cleanly; never prunes.</summary>
+    public int AutoCaptureCapMb = 200;
+
     // --- safety ------------------------------------------------------------
     /// <summary>
     /// Master intensity, the hotkey-adjustable one. Clamped to §12's ceiling on load: this
@@ -188,6 +208,13 @@ public sealed class RippleConfig
         MinSecondsBetweenAdvances = Math.Max(5, Num(p, "minSecondsBetweenAdvances",
                                                     MinSecondsBetweenAdvances));
 
+        var meta = root["metadata"] as JsonObject;
+        Metadata = Bool(meta, "enabled", Metadata);
+        Caption = Bool(meta, "caption", Caption);
+        AutoCapture = Bool(meta, "autoCapture", AutoCapture);
+        AutoCaptureSeconds = Math.Clamp(Num(meta, "autoCaptureSeconds", AutoCaptureSeconds), 10, 600);
+        AutoCaptureCapMb = Math.Max(10, Int(meta, "autoCaptureCapMb", AutoCaptureCapMb));
+
         var s = root["safety"] as JsonObject;
         // The clamp is the point: §12 is not preset-overridable and it is not
         // config-overridable either. Intensity may only ever scale the picture DOWN.
@@ -231,6 +258,14 @@ public sealed class RippleConfig
                 ["autoAdvanceOnNovelty"] = AutoAdvanceOnNovelty,
                 ["noveltyThreshold"] = NoveltyThreshold,
                 ["minSecondsBetweenAdvances"] = MinSecondsBetweenAdvances,
+            },
+            ["metadata"] = new JsonObject
+            {
+                ["enabled"] = Metadata,
+                ["caption"] = Caption,
+                ["autoCapture"] = AutoCapture,
+                ["autoCaptureSeconds"] = AutoCaptureSeconds,
+                ["autoCaptureCapMb"] = AutoCaptureCapMb,
             },
             ["safety"] = new JsonObject { ["masterIntensity"] = MasterIntensity },
             ["screenshotDir"] = ScreenshotDir,

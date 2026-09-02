@@ -67,7 +67,7 @@ public sealed class AudioEngine : IDisposable
     /// render-driven recorder captured one row in four and still labelled the file 93.8 fps.
     /// Replaying that timeline ran four times too fast, and nothing about the file said so.
     /// </summary>
-    public void AttachRecorder(FeatureRecorder recorder) => _recorder = recorder;
+    public void AttachRecorder(FeatureRecorder? recorder) => _recorder = recorder;
 
     public FeatureRecorder? Recorder => _recorder;
 

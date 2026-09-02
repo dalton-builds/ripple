@@ -38,7 +38,18 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <PublishReadyToRun>true</PublishReadyToRun>
     <PublishTrimmed>false</PublishTrimmed>
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- FALSE, and this is load-bearing. With native libraries bundled into the single file
+         they are self-extracted to a temp directory at startup, and Silk.NET's own native
+         resolver does not find glfw3.dll there: the published exe dies with
+         "PlatformNotSupportedException: Couldn't find a suitable window platform
+         (GlfwPlatform - not applicable)" while the identical build run from bin/ works, because
+         bin/ has glfw3.dll sitting beside it. Explicitly registering the platform does not
+         help — registration succeeds and the platform then reports itself not applicable,
+         which is the native load failing one layer down.
+
+         Leaving natives loose costs a handful of files next to the exe and matches what
+         shaders/, presets/ and data/ already do. -->
+    <IncludeNativeLibrariesForSelfExtract>false</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
   <ItemGroup>
@@ -52,6 +63,13 @@
          of polling; see GlHost.WaitForEvents and plan 11. -->
     <PackageReference Include="Silk.NET.GLFW" Version="*" />
     <PackageReference Include="NAudio" Version="*" />
+
+    <!-- The now-playing caption (§8.5) rasterizes text to a bitmap with GDI+ and uploads
+         it as a texture. The alternative was a hand-built bitmap font atlas, which is more
+         code for a worse result: §8.5 asks specifically for a legible face at small sizes,
+         and a real system font hinted at 15 px is exactly that. Windows-only, which this
+         project already is. -->
+    <PackageReference Include="System.Drawing.Common" Version="*" />
 
     <!-- Optional convenience wrapper over SMTC. Try the raw
          Windows.Media.Control API first; add this only if the async

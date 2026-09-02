@@ -98,6 +98,24 @@ public sealed class DrawState
     private const double BeatPulseSharpness = 3.0, BarPulseSharpness = 2.0;
 
     /// <summary>
+    /// Novelty's usable ceiling on real audio. Everything above it is already a section change.
+    ///
+    /// The mapping arithmetic is written for a field that spends its time around 0.5 —
+    /// `fractalMorph` applies `beatMorph *= 0.6 + 0.9v`, which is 1.05 at v = 0.5. Novelty is
+    /// not that kind of field. Measured on the real capture: p50 0.039, p90 0.156, p99 0.319,
+    /// **max 0.430**. So the route multiplied morph by 0.635 at the median and never once
+    /// reached 1.0 — a permanent suppressor wearing the costume of a modulator, in all eight
+    /// era presets.
+    ///
+    /// 0.35 is just under the observed p99, so a real section change lands near the top of the
+    /// range and the ordinary run of small values stays near the bottom. The alternative was
+    /// raising the analyzer's own NoveltyGain, which would have moved the FEATURE — changing
+    /// every parity fixture and the two presets that route novelty to feedbackDecay — to fix a
+    /// problem that lives in the routing.
+    /// </summary>
+    private const double NoveltyCeiling = 0.35;
+
+    /// <summary>
     /// Convert a routed feature into the value the mapping should actually apply.
     ///
     /// Everything passes through unchanged EXCEPT the two phase fields, and they have to be
@@ -119,6 +137,11 @@ public sealed class DrawState
             return Math.Pow(1 - v, BeatPulseSharpness) * f[FF.BpmConf];
         if (field == FF.BarPhase)
             return Math.Pow(1 - v, BarPulseSharpness) * f[FF.BpmConf];
+        // Spike fields are rescaled to span the range the mapping arithmetic expects. See
+        // NoveltyCeiling — routed raw, novelty could not reach a 1.0 multiplier at its own
+        // maximum.
+        if (field == FF.Novelty)
+            return Math.Clamp(v / NoveltyCeiling, 0, 1);
         return v;
     }
 
