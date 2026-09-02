@@ -109,9 +109,11 @@ All four hot-reload from disk at runtime. Tune them without rebuilding.
 - [x] **0** — WebGL2 harness, 5 presets authored, shaders extracted, timeline recorder working
 - [x] **1** — Native shell renders all 13 presets; cross-host parity gate passes (mean SSIM
   1.0000, min 0.9998 over 780 frames x 13 presets). See "Cross-host parity gate" below.
-- [ ] **2** — WASAPI loopback + full DSP. **Gate is 3 of 4.** Flux and onset closed against
-  measurement; parity re-run green; levels and the tempo octave both blocked on real
-  captures that do not exist yet. See "What is verified, and what is not".
+- [ ] **2** — WASAPI loopback + full DSP. **Gate is 3 of 4.** Flux, onset and parity closed
+  against measurement. **Levels** is the one open item: three real captures now exist and
+  their per-band fits disagree by up to 2.37×, so no coefficients are committed. Tempo moved
+  off the blocking list — the real captures showed its worst failure was an artefact of the
+  synthetic fixture. See "What the first real captures said".
 - [x] **Motion sync** — the beat grid now drives the image. Rhythm moved out of global
   luminance into geometry, phase fields pulse-shaped and confidence-gated, visual envelopes
   scaled in beats. See "Motion sync" for which routes measured a real effect and which did not.
@@ -781,12 +783,151 @@ beat 0.999 → 0.025. That is the property worth having: in a free-time passage 
 tracker gives up, the churn and the morph keep responding to the audio and only the grid
 stops.
 
+### What the first real captures said
+
+Auto-capture produced four 60 s fixtures from ordinary listening, which is the first real
+material this project has ever had. They settled one long-running argument, settled a second in
+a way nobody expected, and corrected something this README previously asserted.
+
+| capture | tier | era | grid |
+|---|---|---|---|
+| Grateful Dead — Sugar Magnolia, Veneta OR **8/27/72** | song mode over era | 2 (Europe '72) | 74.8 BPM, locked 13.5% |
+| Grateful Dead — Sugar Magnolia, Merriweather **6/30/85** | song mode over era | 4 (Brent) | 80.5 BPM, locked 3.6% |
+| Vince Gill — Don't Let Our Love Start Slippin' Away | audio-only (not the family) | 7 | 74.6 BPM, locked 23.5% |
+| Eagles — Take It Easy (2013 Remaster) | audio-only (not the family) | 7 | 137.3 BPM, locked 38.3% |
+
+The two Dead captures are **the same song, thirteen years apart**, which turned out to be worth
+more than any third genre would have been.
+
+#### The octave: MusicLike was the problem, exactly as suspected
+
+`tools/acf-octave.mjs` autocorrelates a captured onset envelope and reports the correlation at
+the beat against the correlation at half that period — the measurement the whole "stop
+iterating" argument rested on.
+
+| material | `acf[beat] / acf[subdivision]` | ACF peak |
+|---|---|---|
+| `MusicLike` (synthetic) | **< 0.12** | — |
+| Sugar Magnolia '85 | **0.785** | 0.094, a weak grid |
+| Sugar Magnolia '72 | **5.05** | 0.181, a usable grid |
+| Take It Easy | **10.8** | 0.174, a usable grid |
+| Don't Let Our Love… | subdivision **negative** (−0.227) | 0.324, a clean grid |
+
+**Real drums invert it.** The structural objection — *no reweighting of the ACF can recover a
+peak that is not there* — was true of `MusicLike` and is false of every real capture. On the
+Vince Gill track the correlation at half the period is actively **negative**, which is what a
+backbeat looks like: the envelope alternates strong/weak, and nothing could mistake the octave.
+
+**But the failure mode that motivated the fix has not reproduced.** `MusicLike` at 88 BPM read
+176.67 *at confidence 0.88* — confidently wrong, which is the only state that matters, because
+a wrong octave below §7.3's floor drives nothing. On real material:
+
+- Take It Easy read **137.3 against a true ~138** — correct, at the highest lock rate of the four;
+- Don't Let Our Love… read 74.6 on a clean grid whose subdivision is negatively correlated;
+- **both Sugar Magnolias read ~75–80**, thirteen years and two completely different recordings
+  apart, and on the 1972 capture the correlation at that period is **5× stronger** than at half
+  it. Two independent recordings agreeing that precisely is not an error mode.
+
+That last row changed the conclusion. The first read looked like "80.5 where the song is roughly
+160, so it read half" — a wrong octave. With the second Dead capture it is clearly not that: the
+tracker is locking the **half-note pulse**, consistently, and the ACF says that is genuinely the
+dominant periodicity in the onset envelope for this arrangement. Whether the half-note or the
+quarter-note is "the beat" of Sugar Magnolia is a question about metrical level, not a defect —
+and a visualizer breathing on the backbeat rather than on every quarter is arguably the better
+answer anyway.
+
+Where the tracker *was* least certain — Merriweather '85, a weak grid at ACF peak 0.094 — it
+locked on **3.6% of frames at mean confidence 0.047**, so §7.3's fallback carried the whole
+minute. That is the design working: least confident exactly where the material is muddiest.
+
+So `CombDoublingEnabled` stays **false** and the tempo prior stays at **sigma 0**. Neither has
+a case to fix in this data: the one wrong reading came with confidence low enough that §7.3
+already handled it, and turning either on risks the drifting-click-track regression that
+retired the comb in the first place. `tempoLock` song modes stay **provisional** — not because
+the tracker is broken, but because no capture yet shows it locking *confidently* on Dead
+material, which is the condition `tempoLock` depends on.
+
+Beat-relative visual time constants are already implemented and confidence-gated, and this data
+is the first evidence that the gate is the right shape: on the only capture where the octave
+was wrong, confidence was 0.047, so the envelopes stayed on their authored constants.
+
+#### The per-band gamma still does not converge, and now it is clearer why
+
+`tools/fit-band-gamma.mjs` fits each capture and reports the **spread across captures**, which
+is the result — a single fit always succeeds and proves nothing.
+
+Across all four captures every band exceeds the 20% tolerance, worst 76%. But mixing a Nashville
+studio record into the sample was never going to prove anything, so the interesting run is the
+**two Dead captures against each other** — same band, same song, different decade:
+
+| band | min | mean | max | spread | |
+|---|---|---|---|---|---|
+| hiMid | 6.90 | 6.92 | 6.95 | **1%** | agree |
+| lowMid | 7.13 | 7.22 | 7.31 | **2%** | agree |
+| mid | 7.16 | 7.29 | 7.42 | **4%** | agree |
+| rms | 7.43 | 7.92 | 8.41 | 12% | agree |
+| bass | 5.08 | 5.55 | 6.02 | 17% | agree |
+| presence | 6.52 | 7.18 | 7.85 | 19% | agree |
+| brilliance | 2.55 | 3.06 | 3.58 | 34% | fail |
+| sub | 2.73 | 3.38 | 4.03 | 38% | fail |
+| **air** | 0.11 | 1.76 | 3.41 | **187% (30×)** | fail |
+
+Six of eleven agree, four of them to within 4%. **And the three that fail are exactly the bands
+whose content depends on the recording medium rather than on the music.**
+
+The air band settles it. Its median on the 1972 Veneta board tape is **exactly 0.0000** — a
+1972 desk feed has no content above 10 kHz at all — against 0.120 in 1985. The fit tries to map
+zero onto the synthetic driver's 0.212 and produces an exponent of 0.11 against the other
+capture's 3.41. That is not a sampling problem and no number of further captures will improve
+it: **you cannot calibrate a band that has nothing in it.** Meanwhile `mid` reads 0.538 and
+0.526 across those same thirteen years, which is why the middle of the spectrum agrees to 4%.
+
+So **the means are still not committed**, and the reason is now specific rather than statistical.
+
+**This corrects an earlier claim in this file.** From the synthetic probe it said "both proxies
+agree every band needs more than 4.66". Real material disagrees: `sub`, `brilliance` and `air`
+all fit below the committed scalar. The direction was wrong, not just the magnitude.
+
+**What would actually resolve it.** Not more captures — the mids are already settled and the
+extremes are unfittable in principle. Two candidates:
+
+- **Commit the middle and leave the edges alone.** `bass` through `presence` agree well enough
+  to justify their means today; `sub`, `brilliance` and `air` keep the scalar. Defensible, and
+  honest about which parts of the spectrum the calibration actually knows about — but it is a
+  patch over a mechanism that does not fit the problem.
+- **Replace the window-plus-curve with a percentile mapping.** Track p10 and p90 of each band's
+  own distribution and map that span onto 0..1 directly. Self-calibrating by construction, no
+  exponent at all, and a band with no content maps to a flat zero instead of demanding an
+  undefined correction. This is the one that addresses the cause: the exponent only has to be
+  large because §7.1's peak-follower envelope has already compressed the range upstream, and how
+  much it compresses is a property of the recording. A calibration whose correct value depends
+  on the tape is not a calibration.
+
+The second is a §7.1 change and wants validating against exactly the material now accumulating.
+
 ### What is verified, and what is not
 
-**The Phase 2 gate is 3 of 4.** Tempo is the open item, and it is open for a specific,
-recorded reason — see "Still open". This phase is not complete and is not tagged as such.
+**The Phase 2 gate is 3 of 4, and the fourth is LEVELS.** Not tagged complete.
 
-193 tests green, 1 skipped and documented. Tempo lock at 60/90/120/132/150/180 BPM; a click
+| item | |
+|---|---|
+| flux | **closed** — continuous and independent, confirmed on the real-audio path |
+| onset | **closed** — fires at the rate the material has, confirmed on real captures |
+| parity | **closed** — mode A green on all three timelines |
+| **levels** | **open** — three real fits disagree by up to 2.37×, so no coefficients are committed |
+
+Tempo moved off this list rather than closing on it. The real captures showed the octave
+problem was largely an artefact of `MusicLike`, and that the one thing that actually mattered —
+being *confidently* wrong — has not reproduced on real material: the single wrong reading came
+with confidence 0.047 and the §7.3 fallback carried it. The tracker is conservative rather than
+correct, which is the behaviour it was designed for. What is left is narrower and is recorded
+under "Still open": no capture yet shows a confident lock on Dead material, so `tempoLock` stays
+provisional.
+
+Levels is the honest blocker. It is one measurement away from closing and that measurement is
+more captures, which now accumulate on their own.
+
+199 tests green, 1 skipped and documented. Tempo lock at 60/90/120/132/150/180 BPM; a click
 track drifting ±8% over 60 s tracked within 2 BPM after converging in 0.94 s; the
 `bpmConfidence < 0.35` fallback engaging on 100% of frames of arrhythmic material with beat
 phase anti-correlating at r = −1.000 with the onset envelope; key detection on five triads;
@@ -800,17 +941,38 @@ real Spotify strings, including the ones that must produce **no** date.
 auto-capture and SMTC all start. One exe (197 MB), `glfw3.dll`, and loose `shaders/`,
 `presets/`, `data/`.
 
-**What Phase 3 still needs a human for.** Everything below the parser is built and wired, but
-four of the six gate items need someone playing Spotify, and I have not been able to run them:
+**Verified against live Spotify.** SMTC attached to a real session and resolved three tracks
+end to end — see "What the first real captures said" for the data:
 
-- three tracks — a dated live release, a studio album, a non-Dead track — giving three visibly
-  different, intentional results **on screen**. The three-tier logic is asserted in
-  `TrackParserTests`, but "looks intentional" is a judgement made by eye;
-- the caption showing the correct show date and venue on a dated release;
-- SMTC actually attaching to a live Spotify session. The session filter, the event plumbing and
-  the 2 s poll are exercised only against their own logic here, not against Spotify;
-- **auto-capture producing at least three real fixtures.** `tests/fixtures/real/auto/` is empty,
-  because nothing has played yet.
+| gate item | |
+|---|---|
+| SMTC attaches to a live Spotify session | **pass** — filter, events and poll all exercised |
+| auto-capture produces ≥3 real fixtures | **pass** — four 60 s captures, unattended |
+| tier 1, dated live release | **pass, twice** — `sugar magnolia` over `era-brent` from 6/30/85, and over `era-europe72` from 8/27/72 |
+| tier 3, non-Dead | **pass, twice** — an Eagles remaster and a Vince Gill record both refused by the artist gate |
+| caption shows show date and venue | **pass** — `Sugar Magnolia · Grateful Dead · Columbia, MD · 6/30/85` |
+| tier 2, Dead studio album with no date | **not seen** — nothing without a date has played |
+
+The two tier-1 passes are worth separating: the same song resolved to **two different eras**,
+2 and 4, purely from the dates in its album titles. That is the era map doing the job it exists
+for, on material nobody selected for it.
+
+The caption is worth a note too. It first rendered as date-only, because 1985-06-30 was not in
+`data/venues.json` — which is the degradation behaving, not a bug: an unknown show is supposed
+to lose the venue and keep the date. Adding the row it had just told us about produced the full
+§8.5 line. That row came from a capture, which is the data file doing what §9.2 says it is for.
+The 1972 capture needed no such help — 8/27/72 was already in the book, because it is the show
+§8.5 uses as its own example.
+
+**Still needs a human.** Two things:
+
+- **Tier 2** — a Dead studio album, something off *American Beauty* or *Workingman's Dead*. It
+  is the one path with no real observation behind it;
+- **the caption on screen.** Its text is asserted and its render path runs, but nobody has
+  looked at it. Note that `S` screenshots will not show it: the screenshot reads the composite
+  target while the caption is drawn afterwards into the back buffer, deliberately, so that
+  chrome can never enter the luminance §12's limiter measures. That is the right trade and it
+  means the caption has to be verified by eye.
 
 Metadata-unavailable is verified: the app runs fully with `metadata.enabled: false`, and the
 null source is the same code path a failed SMTC load takes.
@@ -892,22 +1054,32 @@ stronger hit still breaks through sooner.
 five the plan designates — `tight-backbeat`, `drifting-jam`, `free-time`, `quiet-dynamic`,
 `modern-loud` — have never been recorded, and four things are blocked on them.
 
-**0. The captures are now self-serving, which is the point.** Auto-capture is on by default and
-records a fixture on every new track. The two items below have blocked four cycles between them
-and both need the same thing — real material — so the fastest route to closing them is to leave
-Ripple running while you listen for an afternoon, then:
+**0. The captures work, and they have started answering things.** Three arrived from ordinary
+listening and are analysed above. The tooling to keep going:
 
 ```powershell
-node tools/timeline-stats.mjs tests\fixtures\real\auto\*.json     # is the take usable
-node tools/fit-band-gamma.mjs tests\fixtures\real\auto\<one>.json # per-band exponents
+node tools/timeline-stats.mjs tests\fixtures\real\auto\*.json    # is the take usable
+node tools/acf-octave.mjs     tests\fixtures\real\auto\*.json    # octave structure per capture
+node tools/fit-band-gamma.mjs tests\fixtures\real\auto\*.json    # per-band fit + cross-capture spread
 ```
 
-The specific question for the octave is whether `acf[beat]` is still under 12% of
-`acf[subdivision]` on real drums. On `MusicLike` it is, and that is a property of the fixture:
-real kick-on-the-beat material should invert it. For the gamma, the question is whether two
-real captures agree within something much better than the 4.6× that two synthetic proxies did.
+`acf-octave` has already earned its keep: it showed the beat is present at 78.5% of the
+subdivision on Dead material against under 12% on `MusicLike`, which is what retired the
+"unfixable" reading of the octave problem. `fit-band-gamma` exits nonzero until the captures
+agree, so it can be run without judgement — it will say when there is enough.
+
+What would help most now: **more Dead material specifically**, and at least one studio album
+with no date, which is the only tier with no real observation behind it.
 
 **1. Tempo octave on dense material — and the Phase 4 "fix" was not real.**
+
+**Substantially answered by the real captures — read "What the first real captures said" first.**
+The short version: `MusicLike`'s missing beat was a property of the fixture, real drums invert
+it, and the confidently-wrong failure mode has not reproduced on real material. What remains is
+narrower than what this section describes: no capture yet shows the tracker locking
+*confidently* on Dead material, which is the condition `tempoLock` needs. The history below is
+kept because it is why `CombDoublingEnabled` and the tempo prior are both off, and why turning
+either on needs evidence rather than an argument.
 
 Fixing `F_ONSET` exposed this. The comb discriminator was working *because* the onset envelope
 was saturated: a detector firing 13.5 times a second produced a dense envelope whose
@@ -945,13 +1117,18 @@ That is the argument for stopping rather than iterating. This is the third time 
 fitted against `MusicLike` has not meant what it appeared to, and the plan already names the
 instrument that settles it: `tight-backbeat`, unambiguous by construction.
 
-**2. The `LevelGamma` refit — and a scalar gamma probably cannot do it.**
+**2. The `LevelGamma` refit — still open, and the real captures narrowed why.**
 
-Real bands still run high: on the regenerated real capture, `lowMid` p50 0.909, `bass` 0.821,
-`mid` 0.839, against synthetic-driver medians of 0.21–0.46. But the deltas are strongly
-**band-dependent** — about +0.04 at `sub` rising to +0.41 at `air` — and one exponent applied
-to all eight cannot flatten a spread that wide. Forcing a scalar fit would land the middle
-bands and leave `sub` under-corrected and `air` over-corrected.
+**Read "What the first real captures said" for the current numbers.** Three real fits disagree
+by up to 2.37× — better than the 4.6× between synthetic proxies, still far outside the 20%
+that would justify committing a mean. The proposal that follows is unchanged in shape but the
+*direction* it once asserted was wrong, and the correction is recorded above: real material
+wants **less** correction at `sub`, `brilliance` and `air`, not more.
+
+Real bands still run high in the middle: on the regenerated loopback capture, `lowMid` p50
+0.909, `bass` 0.821, `mid` 0.839, against synthetic-driver medians of 0.21–0.46. The deltas are
+strongly **band-dependent**, and one exponent applied to all eight cannot flatten that spread —
+which is why the mechanism is per-band even though the coefficients are not yet fittable.
 
 The proposal, for when the captures exist: replace the scalar with **eight fitted exponents**,
 one per band, `v^gamma[b]`. It keeps every property the current curve has — monotonic, 0→0,

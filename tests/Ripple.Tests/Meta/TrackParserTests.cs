@@ -332,6 +332,72 @@ public sealed class TrackParserTests(ITestOutputHelper log)
         Assert.Equal(want, got);
     }
 
+    /// <summary>
+    /// The three tracks that actually came through SMTC during Phase 3 verification, with the
+    /// exact strings Spotify served. These are no longer hypothetical fixtures — each one has a
+    /// 60 s capture beside it in tests/fixtures/real/auto/, so this test and that data describe
+    /// the same three minutes of listening.
+    ///
+    /// Two of the three are the artist gate doing its job on material nobody chose to test it
+    /// with: an Eagles remaster and a Vince Gill record both arrived unannounced and both were
+    /// correctly refused.
+    /// </summary>
+    [Theory]
+    [InlineData("Sugar Magnolia - Live at Merriweather Post Pavilion, Columbia, MD, 6/30/1985",
+                "Grateful Dead", "Merriweather 6/30/85 (Live)",
+                true, 4, "sugar magnolia")]
+    // The SAME SONG thirteen years earlier, resolving to a different era purely from the date
+    // in its album title. Nobody chose this pair — both arrived from ordinary listening — and
+    // between them they are the clearest evidence the era map does what §9.3 says.
+    [InlineData("Sugar Magnolia - Live in Veneta, Oregon 8/27/72",
+                "Grateful Dead", "Veneta, OR 8/27/72: The Complete Sunshine Daydream Concert (Live)",
+                true, 2, "sugar magnolia")]
+    [InlineData("Don't Let Our Love Start Slippin' Away",
+                "Vince Gill", "I Still Believe In You",
+                false, EraMap.Unknown, "")]
+    [InlineData("Take It Easy - 2013 Remaster",
+                "Eagles", "Eagles (2013 Remaster)",
+                false, EraMap.Unknown, "")]
+    public void Tracks_captured_from_live_smtc_resolve_as_expected(
+        string title, string artist, string album,
+        bool family, int era, string songKey)
+    {
+        var p = Make();
+        var t = p.Parse(title, artist, album);
+
+        log.WriteLine($"{artist} — {title}");
+        log.WriteLine($"    family {t.IsFamily}  era {t.EraId}  date {t.ShowDate?.ToString() ?? "none"}  "
+            + $"song '{t.SongKey}'");
+        log.WriteLine($"    caption: {t.Caption}");
+
+        Assert.Equal(family, t.IsFamily);
+        Assert.Equal(era, t.EraId);
+        Assert.Equal(songKey, t.SongKey);
+
+        // The dated live release is the one that has to carry a real show date — and, now that
+        // 6/30/85 is in the venue book, a venue too. It reached the caption as date-only until
+        // that row was added, which is the degradation working rather than a bug: an unknown
+        // date is supposed to lose the venue and keep the date.
+        if (family)
+        {
+            // Both dated live releases carry a real show date AND a venue. The 1985 row needed
+            // venues.json extending — with a show the capture itself named, which is the data
+            // file doing exactly what §9.2 keeps it in data for. The 1972 row needed nothing:
+            // 8/27/72 was already there, being §8.5's own worked example.
+            Assert.NotNull(t.ShowDate);
+            Assert.NotNull(t.Venue);
+            Assert.Contains("/", t.Caption);          // a day-precision date reached the caption
+        }
+        else
+        {
+            Assert.Null(t.ShowDate);
+            Assert.Null(t.Venue);
+        }
+
+        // Every caption must be short enough to read from three feet, §8.5's actual ask.
+        Assert.True(t.Caption.Length <= 60, $"caption is {t.Caption.Length} chars");
+    }
+
     [Fact]
     public void Caption_is_empty_when_there_is_no_track()
     {

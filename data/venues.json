@@ -1,13 +1,14 @@
 {
   "_comment": "Date or series keyword -> caption text. Used ONLY for the now-playing caption. Missing entries degrade to date-only, then to nothing.",
   "byDate": {
-    "1977-05-08": "Barton Hall, Cornell University, Ithaca NY",
-    "1972-08-27": "Old Renaissance Faire Grounds, Veneta OR",
-    "1974-06-18": "Freedom Hall, Louisville KY",
     "1969-02-27": "Fillmore West, San Francisco CA",
     "1970-05-02": "Harpur College, Binghamton NY",
+    "1972-08-27": "Old Renaissance Faire Grounds, Veneta OR",
     "1973-11-11": "Winterland, San Francisco CA",
+    "1974-06-18": "Freedom Hall, Louisville KY",
+    "1977-05-08": "Barton Hall, Cornell University, Ithaca NY",
     "1978-10-21": "Winterland, San Francisco CA",
+    "1985-06-30": "Merriweather Post Pavilion, Columbia MD",
     "1989-10-09": "Hampton Coliseum, Hampton VA",
     "1990-03-29": "Nassau Coliseum, Uniondale NY",
     "1991-09-10": "Madison Square Garden, New York NY"
@@ -15,11 +16,11 @@
   "bySeries": {
     "europe '72": "Europe 1972",
     "europe 72": "Europe 1972",
-    "one from the vault": "Great American Music Hall, San Francisco CA \u2014 8/13/75",
-    "two from the vault": "Shrine Auditorium, Los Angeles CA \u2014 8/24/68",
-    "ladies and gentlemen": "Fillmore East, New York NY \u2014 April 1971",
-    "closing of winterland": "Winterland, San Francisco CA \u2014 12/31/78",
-    "cornell": "Barton Hall, Cornell University, Ithaca NY \u2014 5/8/77"
+    "one from the vault": "Great American Music Hall, San Francisco CA — 8/13/75",
+    "two from the vault": "Shrine Auditorium, Los Angeles CA — 8/24/68",
+    "ladies and gentlemen": "Fillmore East, New York NY — April 1971",
+    "closing of winterland": "Winterland, San Francisco CA — 12/31/78",
+    "cornell": "Barton Hall, Cornell University, Ithaca NY — 5/8/77"
   },
   "seriesPrefixes": [
     "dick's picks",
