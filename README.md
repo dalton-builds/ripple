@@ -442,6 +442,46 @@ Every one of these came out of a measurement, and the measurement is in the code
 next to it:
 
 | §7 says | Built as | Because |
+|---|---|---|
+| `confidence = peak / mean(acf)` | Peak of the **mean-removed, variance-normalized** autocorrelation | The ratio is tempo-biased: identical metronomes scored 3.62 at 60 BPM and 1.28 at 180, with no threshold able to accept 180 without also accepting arrhythmic clicks. As a correlation coefficient, click tracks land at 0.84–0.96 flat across the range and free time at 0.07. |
+| BPM median over 8 s | 2 s | With the 4 s autocorrelation window, 8 s put the estimate ~7 s behind a drifting tempo — 3.16 BPM against §14's own ±2 BPM requirement. The two numbers are in tension and the drift case is the Dead case. |
+| HPSS time window 5 | 17 | At a 512-sample hop, 5 frames is 53 ms — about the length of the drum hit it is meant to reject. A click filled the window and a click track measured *less* percussive than a pad. |
+| `perc = sumP / (sumP + sumH)` | Per-bin mask, then the ratio of masked energy | Summing the two medians across the spectrum does not discriminate: both sums are dominated by the window's leakage floor, and a pad and a dense mix both measured 0.42. |
+| chroma = `|X[k]|` with a log-frequency taper | Spectral **peaks** only, at parabolically interpolated frequencies | Summing every bin smears the vector across all twelve classes — a leakage skirt spans several bins, and one bin spans several semitones below 200 Hz. A C major chord came out C#/G#/A# and read as B-flat minor. |
+| bands normalized to 0..1 | The **percentile** of each band within its own 45 s history, faded to zero below 6 dB of p5–p95 spread | Three faults, and the third retired the first fix. §7.1's envelope is a peak follower, so on dense material it sits at the top of its own window and every field read ~0.4 high; and the per-band normalizer amplifies its own noise floor, lighting all eight bands to 0.93 on a pure 1550 Hz tone. The first repair was that window plus a fitted `v^gamma`, and **that exponent cannot be fitted** — see below. Percentile mapping needs no target median to aim at, so there is no constant to fit: it took the aggregate |delta| against the synthetic driver from 0.184 to 0.122, and it holds bands identical to three decimals across a spectral-balance change that takes `air` to 0.000. The 6 dB floor survives as a spread gate, because the percentile of a value inside a 0.4 dB distribution is still 0..1 and would still expand noise into motion. |
+| `dynamics = peak - rms` | Crest factor in dB, normalized separately | Both inputs are already normalized against their own ranges, so on steady material both sit near the top and the difference is ~0 regardless of how peaky the audio is. |
+| novelty = cosine distance | × 2.5 | Cosine distance between two non-negative 8-vectors is confined to a small part of 0..1; a hard cut measured 0.4 and steady material under 0.09, while presets route novelty expecting the full range. |
+| `flux` normalized against its own range | 55 ms envelope, then an adaptive window whose hi/lo track the **envelope** and not the raw input, clamp applied last | Two structural faults, and the field measured p50 0.000 / p90 1.000 on real audio — two spikes, nothing between. The divisor was the onset comparator's own threshold, so it saturated on every onset and duplicated `F_ONSET`; and raw flux is half-wave rectified, so it is ~0 wherever the spectrum falls (42% of frames on dense material, 91% on a click track). Tracking the window on the raw extremes while the numerator is smoothed then capped it at p90 0.229. |
+| 50 ms onset refractory alone | Refractory **plus** a post-onset bar at 3.5× the firing peak, decaying at 130 ms | The refractory is four times shorter than the 150 ms envelope decay, so a detection on the shoulder of a peak re-armed the impulse before it had fallen. Measured 13.5 onsets/s against 3.6 genuine event times, holding `F_ONSET` at mean 0.762 — and `AdvanceMotifs` gates bolts on `onset > 0.82`, so the gate was armed on 40% of frames and motifs fired on their cooldown. A multiplier **below** 1 cannot fix this: if the bar starts under the peak that armed it, an equal peak one hop later already clears it. Above 1 the minimum spacing becomes `tau·ln(mult)` = 163 ms, while a genuinely stronger hit still breaks through. |
+
+**Why `v^gamma` was retired rather than refitted.** It was measured to be unfittable, not
+merely untuned. The exponent had to be calibrated per band against real material, and real
+material does not agree on what the answer is: the `air` band's median on a 1972 Veneta
+board tape is **exactly 0.0000**, against **0.120** on a 1985 release of the same song — a
+desk feed from 1972 has no content above 10 kHz at all. The exponent that maps 0.0000 onto
+the synthetic driver's 0.212 is 0.11; the one that maps 0.120 is 3.41. That is a 30x
+disagreement, and **no number of further captures narrows it**, because a band with nothing
+in it carries no information about how to scale it. The mids, by contrast, agreed to within
+1–4% across those thirteen years — the failure is specific to bands the recording chain
+did not capture, and those are exactly the bands a Dead archive is full of.
+
+Percentile mapping does not ask the question that has no answer. It asks where a value sits
+in what the band has been doing lately, which is defined for every distribution, and a band
+with no content has no spread and is reported as static instead of demanding an undefined
+correction. The cost of that is one decaying 1 dB histogram per field: the DSP went from
+**1.70% to 1.76% of one core** against its 2% budget, spent almost entirely in `bands`
+(0.0051 → 0.0132 ms/hop).
+
+The window length is the only tuning parameter left, and 45 s is set by the shape of the
+material rather than by taste: verse-to-chorus dynamics run 20–30 s, so the window must be
+longer than that for a quiet verse to read as quiet, while a Dark Star arc runs several
+minutes, so it must be far shorter than that for the arc to still read as movement.
+`NormalizationTests` is the guard on the last three. Its real assertion is the **aggregate**:
+a systematic scaling error moves every field the same way, and that is the failure that
+makes all 13 presets look wrong at once. Per-field tolerances are deliberately loose,
+because a per-field difference between a synthetic audio signal and a slider default is not
+evidence of anything.
+
 ## Dead intelligence layer
 
 §9. What makes it a talking point rather than a screensaver: the machine demonstrably
@@ -590,6 +630,54 @@ other   era=7  date=none        song=''           Ripple · Some Other Band
 Three different, intentional states — and the third is the one the artist gate earns: same
 title, same year in the album, and it correctly refuses to treat it as a Dead show.
 
+**Tier 2 was reported as unexercised twice, and that is now fixed at both levels.** The table
+above came from the parser; what had never run was the rest of the chain — the director's
+`Resolve`, the preset lookup, the caption — for a track that is the family with *no* date.
+Tiers 1 and 3 turn up within minutes of ordinary listening; tier 2 needs a studio cut, and
+across two sessions one never came up on shuffle.
+
+- `DegradationTierTests` pins all three through the **real** parser, venue book and preset
+  store rather than stubs, because the failures that matter live in the data files: a preset
+  id that is not on disk resolves to a fallback index and looks like it worked. It passes a
+  sentinel `fallbackIndex` of `-999` so a fallback return is visible instead of plausible.
+- `--meta-script "Title|Artist|Album;..."` drives the metadata layer from the command line
+  through the same seam SMTC uses, so a tier can be rehearsed on demand. It is a diagnostic:
+  the HUD reports `scripted` and the log says so, because a rehearsed caption must never be
+  mistaken for an observed one.
+
+Live, in the running app, all four scripted tracks in order:
+
+```
+Dark Star / Grateful Dead / Sunshine Daydream (8/27/72)
+  -> song mode 'dark star' over era-europe72        [1972-08-27] era 2   tier 1
+Sugar Magnolia / Grateful Dead / American Beauty
+  -> song mode 'sugar magnolia' over era-unknown    no date,    era 7   tier 2
+Ripple / Grateful Dead / American Beauty
+  -> song mode 'ripple' over era-unknown            no date,    era 7   tier 2
+Blue Monday / New Order / Power Corruption and Lies
+  -> audio-only (not the family)                    no date,    era 7   tier 3
+```
+
+The tier-2 caption is **`Sugar Magnolia · Grateful Dead`** — venue and date fields absent
+rather than empty, which is the thing worth asserting: the line is assembled by joining a
+list, so an unconditional add of a null venue would print `· ·`.
+
+Two things the exercise found:
+
+- **`IMetadataSource` was not actually a seam.** The director subscribed to track changes
+  behind `source is SmtcMetadataSource`, so any other implementation could never deliver a
+  track no matter what it reported — including the `NullMetadataSource` the file's own comment
+  calls "a first-class implementation rather than a test double". The events are now on the
+  interface and the type check is gone.
+- **A log line claimed a source that was not running.** `[meta] SMTC watching for Spotify` was
+  printed unconditionally after `Start()`, so it appeared even on the fallback path taken when
+  the projection fails to load and nothing is watching at all. It now reports the source's own
+  status and says `running audio-only` when the source is unavailable.
+
+One departure from §8.5 worth naming: its example caption is `Dark Star · Veneta, OR · 8/27/72`,
+three fields and no artist. The artist is carried anyway — on a bootleg the band name is the
+part a listener cannot infer from the title — so tier 1 shows four fields.
+
 ### `tempoLock` is provisional
 
 Song modes with `"tempoLock": true` — `drums` is the shipped one — inherit the **unresolved
@@ -625,24 +713,6 @@ Two things cost a publish cycle each, and both only reproduce in a published bui
 
 Verified by copying the publish folder to a directory outside the repo and running it with a
 bare `C:\Windows\system32` PATH and no `DOTNET_ROOT`.
-
-|---|---|---|
-| `confidence = peak / mean(acf)` | Peak of the **mean-removed, variance-normalized** autocorrelation | The ratio is tempo-biased: identical metronomes scored 3.62 at 60 BPM and 1.28 at 180, with no threshold able to accept 180 without also accepting arrhythmic clicks. As a correlation coefficient, click tracks land at 0.84–0.96 flat across the range and free time at 0.07. |
-| BPM median over 8 s | 2 s | With the 4 s autocorrelation window, 8 s put the estimate ~7 s behind a drifting tempo — 3.16 BPM against §14's own ±2 BPM requirement. The two numbers are in tension and the drift case is the Dead case. |
-| HPSS time window 5 | 17 | At a 512-sample hop, 5 frames is 53 ms — about the length of the drum hit it is meant to reject. A click filled the window and a click track measured *less* percussive than a pad. |
-| `perc = sumP / (sumP + sumH)` | Per-bin mask, then the ratio of masked energy | Summing the two medians across the spectrum does not discriminate: both sums are dominated by the window's leakage floor, and a pad and a dense mix both measured 0.42. |
-| chroma = `|X[k]|` with a log-frequency taper | Spectral **peaks** only, at parabolically interpolated frequencies | Summing every bin smears the vector across all twelve classes — a leakage skirt spans several bins, and one bin spans several semitones below 200 Hz. A C major chord came out C#/G#/A# and read as B-flat minor. |
-| bands normalized to 0..1 | Same window, plus a fitted `v^4.66` calibration and a relative gate | Two structural problems. §7.1's envelope is a peak follower, so on dense material it sits at the top of its own window and every field read ~0.4 high — presets authored in the harness would be driven flat out. And the per-band normalizer amplifies its own noise floor: a pure 1550 Hz tone lit all eight bands to 0.93 until a gate, relative to the loudest band, suppressed the ones carrying only leakage. |
-| `dynamics = peak - rms` | Crest factor in dB, normalized separately | Both inputs are already normalized against their own ranges, so on steady material both sit near the top and the difference is ~0 regardless of how peaky the audio is. |
-| novelty = cosine distance | × 2.5 | Cosine distance between two non-negative 8-vectors is confined to a small part of 0..1; a hard cut measured 0.4 and steady material under 0.09, while presets route novelty expecting the full range. |
-| `flux` normalized against its own range | 55 ms envelope, then an adaptive window whose hi/lo track the **envelope** and not the raw input, clamp applied last | Two structural faults, and the field measured p50 0.000 / p90 1.000 on real audio — two spikes, nothing between. The divisor was the onset comparator's own threshold, so it saturated on every onset and duplicated `F_ONSET`; and raw flux is half-wave rectified, so it is ~0 wherever the spectrum falls (42% of frames on dense material, 91% on a click track). Tracking the window on the raw extremes while the numerator is smoothed then capped it at p90 0.229. |
-| 50 ms onset refractory alone | Refractory **plus** a post-onset bar at 3.5× the firing peak, decaying at 130 ms | The refractory is four times shorter than the 150 ms envelope decay, so a detection on the shoulder of a peak re-armed the impulse before it had fallen. Measured 13.5 onsets/s against 3.6 genuine event times, holding `F_ONSET` at mean 0.762 — and `AdvanceMotifs` gates bolts on `onset > 0.82`, so the gate was armed on 40% of frames and motifs fired on their cooldown. A multiplier **below** 1 cannot fix this: if the bar starts under the peak that armed it, an equal peak one hop later already clears it. Above 1 the minimum spacing becomes `tau·ln(mult)` = 163 ms, while a genuinely stronger hit still breaks through. |
-
-`NormalizationTests` is the guard on the last three. Its real assertion is the **aggregate**:
-a systematic scaling error moves every field the same way, and that is the failure that
-makes all 13 presets look wrong at once. Per-field tolerances are deliberately loose,
-because a per-field difference between a synthetic audio signal and a slider default is not
-evidence of anything.
 
 
 ## Motion sync
@@ -895,15 +965,23 @@ extremes are unfittable in principle. Two candidates:
   to justify their means today; `sub`, `brilliance` and `air` keep the scalar. Defensible, and
   honest about which parts of the spectrum the calibration actually knows about — but it is a
   patch over a mechanism that does not fit the problem.
-- **Replace the window-plus-curve with a percentile mapping.** Track p10 and p90 of each band's
-  own distribution and map that span onto 0..1 directly. Self-calibrating by construction, no
-  exponent at all, and a band with no content maps to a flat zero instead of demanding an
-  undefined correction. This is the one that addresses the cause: the exponent only has to be
-  large because §7.1's peak-follower envelope has already compressed the range upstream, and how
-  much it compresses is a property of the recording. A calibration whose correct value depends
-  on the tape is not a calibration.
+- **Replace the window-plus-curve with a percentile mapping.** Track each band's own
+  distribution and map a value's position in it onto 0..1 directly. Self-calibrating by
+  construction, no exponent at all, and a band with no content maps to a flat zero instead of
+  demanding an undefined correction. This is the one that addresses the cause: the exponent only
+  has to be large because §7.1's peak-follower envelope has already compressed the range
+  upstream, and how much it compresses is a property of the recording. A calibration whose
+  correct value depends on the tape is not a calibration.
 
-The second is a §7.1 change and wants validating against exactly the material now accumulating.
+**The second was taken.** `PercentileNorm` replaced the window-plus-exponent, the fitted
+constants are gone rather than refitted, and the deviation table above records the measurement
+that retired them. What it bought, on the property the exponent could never deliver: across a
+spectral-balance change severe enough to take `air` from 0.487 to **exactly 0.000**, the bands
+the change did not touch move by less than 0.002 — `sub` 0.396/0.396, `bass` 0.468/0.468,
+`lowMid` 0.610/0.611. Medians land at 0.30–0.61 with nothing aimed at them, and the aggregate
+|delta| against the synthetic driver fell from **0.184 to 0.122** — better than either fitted
+exponent managed (0.192 scalar, 0.205 per-band) and with no fitted number left to disagree
+about. Cost: **1.70% → 1.76% of one core.**
 
 ### What is verified, and what is not
 
@@ -1117,32 +1195,35 @@ That is the argument for stopping rather than iterating. This is the third time 
 fitted against `MusicLike` has not meant what it appeared to, and the plan already names the
 instrument that settles it: `tight-backbeat`, unambiguous by construction.
 
-**2. The `LevelGamma` refit — still open, and the real captures narrowed why.**
+**2. `LevelGamma` is closed — by deleting it, not by fitting it.**
 
-**Read "What the first real captures said" for the current numbers.** Three real fits disagree
-by up to 2.37× — better than the 4.6× between synthetic proxies, still far outside the 20%
-that would justify committing a mean. The proposal that follows is unchanged in shape but the
-*direction* it once asserted was wrong, and the correction is recorded above: real material
-wants **less** correction at `sub`, `brilliance` and `air`, not more.
+The refit was never going to land. Three real fits disagreed by up to 2.37×, and `air` by 30×,
+for a reason that is structural rather than statistical: a 1972 board tape has no content above
+10 kHz, so its `air` median is exactly 0.0000, and there is no exponent that maps zero onto a
+target. `LevelGamma`, `BandGamma` and `Calibrate` are gone; §7.1 now normalizes each field by
+its **percentile within its own 45 s history**, with §7.1's 6 dB floor carried forward as a
+spread gate so a flat band reads a stable zero instead of expanding its own noise. The
+measurement, the numbers and the retained rationale are in the deviation table and the note
+under it; `PercentileNorm`'s class comment carries the same record next to the code, including
+the bin-range bug that made the whole spectrum read zero on loud material.
 
-Real bands still run high in the middle: on the regenerated loopback capture, `lowMid` p50
-0.909, `bass` 0.821, `mid` 0.839, against synthetic-driver medians of 0.21–0.46. The deltas are
-strongly **band-dependent**, and one exponent applied to all eight cannot flatten that spread —
-which is why the mechanism is per-band even though the coefficients are not yet fittable.
+**What is still not verified.** The cross-era validation asked for was to be run against the
+four committed captures, and it cannot be: those are **post-DSP feature timelines**, so they
+contain the old normalizer's output rather than the analyzer's input, and no new normalizer can
+be replayed through them. The synthetic stand-in above exercises the same property — a large
+spectral-balance change with the low bands held — but it is a stand-in. Playing those four
+tracks again lets auto-capture record them under the new DSP, after which comparing the 1972
+and 1985 captures field by field is the real test. Until then this is validated by mechanism
+and by construction, not by real material.
 
-The proposal, for when the captures exist: replace the scalar with **eight fitted exponents**,
-one per band, `v^gamma[b]`. It keeps every property the current curve has — monotonic, 0→0,
-1→1, no change to ordering or to band isolation — and it is the same one-line change at the
-call site, because `Calibrate` is already applied per band. Fit each `gamma[b]` as
-`ln(synthetic_median[b]) / ln(real_median[b])` over the capture set, then judge the result on
-the aggregate in `NormalizationTests` rather than on the per-field tolerances, which are
-deliberately loose. `LevelGamma` stays at 4.66 until then; refitting it against `MusicLike` is
-precisely the error the fixture set exists to prevent.
-
-**3. Preset retuning.** Blocked on 2, by design. All 13 presets were authored against the
-synthetic driver's ranges and none has been touched. If `LevelGamma` becomes eight exponents,
-every band-driven mapping shifts underneath them, and retuning first is work that has to be
-redone. The feature recorder and harness replay exist for exactly this and are ready.
+**3. Preset retuning — still not done, and less needed than it was.** All 13 presets were
+authored against the synthetic driver's ranges and none has been touched. The case for
+retuning was that real bands ran far above those ranges; percentile normalization removed most
+of that gap by construction (aggregate |delta| 0.122, per-band deltas +0.011 to +0.229 where
+the scalar gave +0.04 to +0.41), so what is left may not warrant a retune at all. Deciding
+that needs the re-captured comparison in item 2 — retuning against a normalizer whose real-
+material behaviour is still unmeasured is the same work-that-has-to-be-redone trap as before.
+The feature recorder and harness replay are ready for it.
 
 **4. The 8-hour soak has not completed.** Started twice; the machine went idle both times. The
 longest clean run is **30 minutes**, and it is encouraging rather than conclusive: private

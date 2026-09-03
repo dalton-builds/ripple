@@ -155,6 +155,48 @@ internal static class SignalGen
     /// ~0.95. Real material is plucked and re-struck: notes decay, so the band envelopes
     /// move over the window the normalizer actually looks at.
     /// </summary>
+    /// <summary>
+    /// The same music with its top octave rolled off — a stand-in for a 1972 desk feed.
+    ///
+    /// This exists because that recording is what broke the fitted-exponent calibration, and
+    /// the failure needs a test that does not require the tape. Measured on the real capture,
+    /// the air band's median is EXACTLY 0.0000 on the 1972 Veneta board tape against 0.120 on a
+    /// 1985 release of the same song, and no per-band exponent can serve both.
+    ///
+    /// A one-pole lowpass at roughly 6 kHz, applied twice, puts the 10-16 kHz air band at the
+    /// noise floor while leaving everything below `presence` essentially untouched — which is
+    /// exactly the shape of the problem. What a normalization scheme must do is report the SAME
+    /// values for the mid bands from both versions, and report the air band as absent rather
+    /// than stretching its noise to hit a target median.
+    /// </summary>
+    public static float[] MusicLikeDarkTape(double seconds, double bpm = 108,
+                                            int rate = Rate, int seed = 7)
+    {
+        var src = MusicLike(seconds, bpm, rate, seed);
+        var o = new float[src.Length];
+
+        // SIX cascaded one-poles at 9 kHz, not two at 6 kHz. The gentler filter was tried and
+        // is not faithful: it left the air band reading 0.203 because 10-16 kHz was only ~25 dB
+        // down and still varying, where the real 1972 capture reads EXACTLY 0.0000. Six poles
+        // put 13 kHz about 38 dB below the corner, which together with the band-relative gate
+        // reproduces "this tape has no top end" rather than "this tape is a bit dull".
+        //
+        // It does also take the upper half of `brilliance` with it, and that is correct rather
+        // than collateral: the real capture shows brilliance 0.089 against 0.179 on the 1985
+        // release — halved, not silenced. Modelling the rolloff as a cliff at exactly 10 kHz
+        // would be less like a tape, not more.
+        const int Poles = 6;
+        double a = 1 - Math.Exp(-2 * Math.PI * 9000.0 / rate);
+        var z = new double[Poles];
+        for (int i = 0; i < src.Length; i++)
+        {
+            double x = src[i];
+            for (int p = 0; p < Poles; p++) { z[p] += a * (x - z[p]); x = z[p]; }
+            o[i] = (float)x;
+        }
+        return o;
+    }
+
     public static float[] MusicLike(double seconds, double bpm = 108, int rate = Rate, int seed = 7)
     {
         int n = (int)(seconds * rate);

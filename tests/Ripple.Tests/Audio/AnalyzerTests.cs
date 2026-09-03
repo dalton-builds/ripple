@@ -62,12 +62,28 @@ public sealed class AnalyzerTests(ITestOutputHelper log)
         log.WriteLine($"band {band} @ {hz} Hz -> "
             + string.Join(" ", bands.Select(v => $"{v:F3}")));
 
-        Assert.True(target > 0.6, $"band {band} at {hz} Hz only reached {target:F3}");
+        // 0.4, not 0.6, and the change is deliberate. Under percentile normalization a STEADY
+        // tone reads the median of its own history, because that is what it is: 3 s of tone
+        // after 0.5 s of silence puts the current value at about the 57th percentile of the
+        // band's last few seconds. The old window-plus-exponent chain reported ~1.0 here
+        // because its envelope sat at the top of its window, which is also why a sustained note
+        // used to peg a field at maximum and stay there. Reading mid-range for "this is what
+        // this band has been doing" is the better answer.
+        Assert.True(target > 0.4, $"band {band} at {hz} Hz only reached {target:F3}");
 
-        // The driven band must be the strongest, whatever else leaks.
+        // The driven band must be the strongest — but only against bands that are NOT its
+        // immediate neighbours. Percentile mapping is scale-free by design, so a neighbour
+        // catching the Hann skirt of a steady tone reports the same percentile as the driven
+        // band: both have been doing one constant thing for the same length of time. Absolute
+        // level is what would separate them and that is precisely what this normalization no
+        // longer carries. Gross cases are handled by the relative gate, and the isolation loop
+        // below is the assertion that actually has teeth.
         for (int i = 0; i < 8; i++)
+        {
+            if (Math.Abs(i - band) <= 1) continue;
             Assert.True(f[FF.Sub + i] <= target + 1e-6,
                 $"band {i} = {f[FF.Sub + i]:F3} exceeds driven band {band} = {target:F3}");
+        }
 
         // Bands narrower than the Hann main lobe cannot be resolved from their immediate
         // neighbour; everything else must be clean.
@@ -484,7 +500,11 @@ public sealed class AnalyzerTests(ITestOutputHelper log)
             var bands = new float[8];
             f.Slice(FF.Sub, 8).CopyTo(bands);
             log.WriteLine($"{rate} Hz: bands " + string.Join(" ", bands.Select(v => $"{v:F3}")));
-            Assert.True(f[FF.HiMid] > 0.6, $"at {rate} Hz, hiMid only reached {f[FF.HiMid]:F3}");
+            // 0.4 for the same reason as Band_isolates_its_own_range: a steady tone reads the
+            // median of its own history under percentile normalization. What this test is
+            // actually about is that the BAND EDGES are computed from the real sample rate,
+            // and that is carried by hiMid responding at all while presence stays clean.
+            Assert.True(f[FF.HiMid] > 0.4, $"at {rate} Hz, hiMid only reached {f[FF.HiMid]:F3}");
             Assert.True(f[FF.Presence] < 0.1, $"at {rate} Hz, presence leaked to {f[FF.Presence]:F3}");
         }
     }

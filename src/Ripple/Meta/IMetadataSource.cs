@@ -42,6 +42,19 @@ public interface IMetadataSource : IDisposable
 
     /// <summary>Begin. Safe to call when unavailable; leaves <see cref="Available"/> false.</summary>
     void Start();
+
+    /// <summary>
+    /// Raised when the track changes, off whatever thread the source runs on.
+    ///
+    /// THIS IS ON THE INTERFACE RATHER THAN ON THE SMTC CLASS, and that matters: the director
+    /// used to subscribe behind `source is SmtcMetadataSource`, which made every other
+    /// implementation of this seam incapable of ever delivering a track no matter what it
+    /// reported. A seam only one type can drive is not a seam.
+    /// </summary>
+    event Action<RawTrack>? TrackChanged;
+
+    /// <summary>Raised on play/pause/stop. Same threading caveat.</summary>
+    event Action<PlaybackState>? PlaybackChanged;
 }
 
 /// <summary>
@@ -56,4 +69,11 @@ public sealed class NullMetadataSource : IMetadataSource
     public void Poll() { }
     public void Start() { }
     public void Dispose() { }
+
+    // Declared so this is a full implementation of the seam, never raised. The compiler warns
+    // about the unused backing field, which is exactly right and exactly the intent.
+#pragma warning disable CS0067
+    public event Action<RawTrack>? TrackChanged;
+    public event Action<PlaybackState>? PlaybackChanged;
+#pragma warning restore CS0067
 }

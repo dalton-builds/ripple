@@ -17,6 +17,13 @@ public sealed class RippleOptions
     public string Song = "";
 
     /// <summary>
+    /// `--meta-script "Title|Artist|Album;..."` — drive the metadata layer from the command
+    /// line instead of from SMTC, so §9.4's tiers can be exercised on demand. Diagnostic only;
+    /// see <see cref="Meta.ScriptedMetadataSource"/> for why it had to exist.
+    /// </summary>
+    public string MetaScript = "";
+
+    /// <summary>
     /// Drive the visuals from real desktop audio (WASAPI loopback) rather than from the
     /// synthetic driver. The synthetic driver stays the parity reference and the fallback,
     /// so this is opt-in for now; Phase 5 makes it the default.
@@ -133,6 +140,7 @@ public sealed class RippleOptions
                 case "--data": o.DataRoot = Next(a); break;
                 case "--preset": o.Preset = Next(a); break;
                 case "--song": o.Song = Next(a); break;
+                case "--meta-script": o.MetaScript = Next(a); break;
                 case "--timeline": o.Timeline = Next(a); break;
                 case "--step": o.Step = true; break;
                 case "--no-vsync": o.VSync = false; break;
@@ -229,9 +237,18 @@ public sealed class RippleOptions
           Ripple --budget-test [--budget-seconds 60] [--budget-private MB]
           Ripple --soak <hours>
 
+          Ripple --audio --meta-script "Title|Artist|Album;Title|Artist|Album"
+
         With no arguments at all, Ripple reads %APPDATA%\Ripple\config.json —
         creating it with defaults on first run — and drives itself from desktop
         audio. Nothing below is needed to just run it.
+
+        --meta-script drives the metadata layer from these tracks instead of
+        from SMTC, advancing every 12 s, so §9.4's degradation tiers can be
+        exercised without waiting for the right thing to come up on shuffle.
+        Artist defaults to "Grateful Dead". It is a diagnostic: the HUD and the
+        log both say `scripted`, because a rehearsed caption must never be
+        mistaken for an observed one.
 
         --budget-test is a GATE, not a report: it replays a 60 s scripted
         timeline with vsync off and asserts p99 frame time under 16.6 ms, zero

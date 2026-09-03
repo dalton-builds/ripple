@@ -59,15 +59,12 @@ public sealed class MetadataDirector : IDisposable
         _presets = presets;
         _parser = new TrackParser(VenueBook.Load(dataRoot));
 
-        if (source is SmtcMetadataSource smtc)
+        source.TrackChanged += OnRawTrack;
+        source.PlaybackChanged += s =>
         {
-            smtc.TrackChanged += OnRawTrack;
-            smtc.PlaybackChanged += s =>
-            {
-                State = s;
-                PlaybackChanged?.Invoke(s);
-            };
-        }
+            State = s;
+            PlaybackChanged?.Invoke(s);
+        };
     }
 
     public void Start() => _source.Start();

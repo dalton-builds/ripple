@@ -274,14 +274,22 @@ public sealed class Analyzer
     private readonly double[] _bandHi = new double[8];
     private readonly double[] _bandLo = new double[8];
     private readonly double[] _bandNorm = new double[8];
+
+    /// <summary>One rolling distribution per band. See PercentileNorm.</summary>
+    private readonly PercentileNorm[] _bandPct =
+        [.. Enumerable.Range(0, 8).Select(_ => new PercentileNorm())];
     private readonly double[] _bandEma8s = new double[8];
 
-    private readonly Normalizer _rmsNorm = new(), _peakNorm = new();
+    // rms and peak moved to PercentileNorm; only the two NON-level fields still use the
+    // symmetric envelope normalizer, which never carried an exponent.
 
     // Crest factor and spectral centroid are not levels: a peak-following envelope makes no
     // sense for them and pinned both near 1. Symmetric envelope, and no level calibration.
     private readonly Normalizer _crestNorm = new(peakFollow: false);
     private readonly Normalizer _centroidNorm = new(peakFollow: false);
+
+    /// <summary>rms and peak, on the same percentile footing as the bands.</summary>
+    private readonly PercentileNorm _rmsPct = new(), _peakPct = new();
     private double _loudSlow;
 
     private readonly float[] _fluxHist = new float[FluxHistory];
@@ -528,9 +536,11 @@ public sealed class Analyzer
             // rather than as a step from zero, which would fire a false onset.
             _bandEnv[b] = _bandHi[b] = _bandLo[b] = -120;
             _bandNorm[b] = 0;
+            _bandPct[b].Reset();
             _bandEma8s[b] = 0;
         }
-        _rmsNorm.Reset(); _peakNorm.Reset(); _crestNorm.Reset(); _centroidNorm.Reset();
+        _crestNorm.Reset(); _centroidNorm.Reset();
+        _rmsPct.Reset(); _peakPct.Reset();
         _loudSlow = 0;
 
         Array.Clear(_fluxHist); _fluxAt = 0;
@@ -694,99 +704,49 @@ public sealed class Analyzer
     /// </summary>
     private const double GateFullDb = -35, GateZeroDb = -55;
 
-    /// <summary>
-    /// How fast the normalization window's edges move TOWARD a new extreme.
-    ///
-    /// §7.1 writes the window as `hi = db > hi ? db : ...`, i.e. the edges jump to a new
-    /// extreme instantly and relax back slowly. That makes them a peak-and-trough tracker,
-    /// and the span it reports is the full excursion of the last few seconds — including
-    /// the deepest momentary gap between two notes. An envelope with a 250 ms release sits
-    /// near the top of that span almost all the time, so every normalized field came out
-    /// top-heavy: measured medians of 0.80-0.92 against the synthetic driver's 0.21-0.55.
-    /// Presets authored against the latter would be driven flat out on real audio.
-    ///
-    /// The cause is structural, not a tuning error. §7.1's envelope has a 10 ms attack,
-    /// which makes it a PEAK FOLLOWER: it catches every transient and holds for 250 ms, so
-    /// over dense material it sits within a couple of dB of the 3 s maximum almost
-    /// continuously. (Two alternatives were tried and measured. Tracking the window off the
-    /// envelope rather than the raw dB left the bands at 0.79-0.85. Giving the window edges
-    /// a short time constant toward a new extreme was worse still, pinning every field at
-    /// 1.000, because the edge then follows the envelope even more closely.)
-    ///
-    /// So the window stays exactly as §7.1 specifies and the distribution is corrected
-    /// explicitly, with one monotonic curve on the output. Gamma is FITTED, not guessed:
-    /// v^4.66 maps the measured real median of 0.83 onto the synthetic driver's 0.42, which
-    /// is what makes a preset authored in the harness behave the same on real audio.
-    ///
-    /// Being monotonic, it changes no ordering and no isolation property: 0 stays 0, 1
-    /// stays 1, and a band that is loud relative to its own history still reads high.
-    ///
-    /// It applies to LEVEL-type fields only — the eight bands, rms, peak, loudSlow. Spectral
-    /// centroid and crest factor are not levels; they get a symmetric envelope instead (see
-    /// Normalizer), which centres them without any curve.
-    /// </summary>
-    private const double LevelGamma = 4.66;
 
     /// <summary>
-    /// Per-band calibration exponents, replacing the single <see cref="LevelGamma"/> for the
-    /// eight bands. FITTED, not guessed — `gamma[b] = ln(synthetic_median[b]) / ln(pre[b])`,
-    /// where `pre[b]` is the normalizer's own output recovered by inverting the committed
-    /// scalar curve on the real capture.
+    /// RETIRED: §7.1's normalization window plus a fitted exponent.
     ///
-    /// WHY ONE EXPONENT COULD NOT DO IT. The real-versus-synthetic median deltas run +0.04 at
-    /// `sub` to +0.41 at `air`. A single exponent lands the middle bands and leaves `sub`
-    /// under-corrected and `air` over-corrected, and the whole point of the calibration is
-    /// that a preset authored in the harness behaves the same on real audio — which is a
-    /// per-band property, not an aggregate one.
+    /// Recorded here rather than deleted, because it took four attempts and real captures to
+    /// establish that the approach could not work, and the next person to read §7.1 will reach
+    /// for it again.
     ///
-    /// READ THE SIZE OF THESE NUMBERS AS A SYMPTOM. Needing 9.75 to 45.59 means the
-    /// normalizer's pre-calibration output is pinned hard against 1.0 — measured 0.886 to
-    /// 0.980 at the median, with `lowMid` spanning only 0.928..0.997 from p10 to p90. The
-    /// curve is expanding a 7%-of-full-scale input range across most of the output, so it is
-    /// doing real work, but it is compensating for §7.1's peak-follower envelope rather than
-    /// fixing it. See the LevelGamma note for why the envelope itself is left alone.
+    /// §7.1 normalizes a band as `(env - lo) / span` over a fast-open, slow-close window. That
+    /// window is a peak-and-trough tracker and the envelope has a 10 ms attack, so the envelope
+    /// sits near the top of the span almost continuously: measured medians of 0.80-0.92 against
+    /// the synthetic driver's 0.21-0.55, which would drive every harness-authored preset flat
+    /// out. Two fixes for the window itself were tried and measured — tracking it off the
+    /// envelope left the bands at 0.79-0.85, and giving its edges a short time constant pinned
+    /// every field at 1.000.
     ///
-    /// THE COEFFICIENTS ARE NOT FITTED YET, AND THAT IS A MEASUREMENT, NOT AN OMISSION. All
-    /// eight are the old scalar, so this change is behaviour-neutral until there is data to
-    /// fit against. Running the fit on the two materials available gave:
+    /// So the distribution was corrected on the output instead, with one monotonic curve:
+    /// `v^4.66`, fitted to map a measured real median of 0.83 onto 0.42. That worked until it
+    /// was asked to work on more than one recording.
     ///
-    ///     band         from the capture    from MusicLike    disagreement
-    ///     sub                     9.75              5.23           1.9x
-    ///     bass                   18.52              5.20           3.6x
-    ///     lowMid                 45.59              9.89           4.6x
-    ///     mid                    26.14             12.24           2.1x
-    ///     hiMid                  22.86              6.30           3.6x
-    ///     presence               14.81              9.28           1.6x
-    ///     brilliance             18.59             11.55           1.6x
-    ///     air                    22.86             14.92           1.5x
+    /// WHY IT COULD NOT BE FITTED. One exponent could not serve eight bands whose real-versus-
+    /// synthetic deltas ran +0.04 to +0.41, so it became eight. Eight could not be fitted
+    /// either. Across two Dead captures of the same song thirteen years apart, six of eleven
+    /// fields agreed to within 19% — and the three that failed were exactly the bands whose
+    /// content is a property of the recording rather than the music:
     ///
-    /// The same procedure on two pieces of material disagrees by up to 4.6x, because the
-    /// exponent MULTIPLIES the material difference: at gamma 45, a pre-gamma median of 0.95
-    /// instead of 0.98 moves the output from 0.40 to 0.10. Committing the capture-fitted
-    /// column was tried and measured — it pinned `lowMid` dead at 0.014 on MusicLike and made
-    /// the aggregate worse, 0.192 to 0.205 mean absolute delta. A calibration that depends
-    /// this strongly on which recording it was fitted to is not a calibration.
+    ///     hiMid   1%      brilliance   34%
+    ///     lowMid  2%      sub          38%
+    ///     mid     4%      air         187%   (30x)
     ///
-    /// What both columns DO agree on: every band needs more correction than 4.66. So the
-    /// direction is real and the magnitude is not knowable from one recording. Fit against the
-    /// five real captures with `tools/fit-band-gamma.mjs` and replace this array.
+    /// The air band settles it. Its median on the 1972 Veneta board tape is EXACTLY 0.0000
+    /// against 0.120 in 1985, because a desk feed from 1972 has no content above 10 kHz. The
+    /// fit tries to map zero onto 0.212 and returns 0.11 on one capture against 3.41 on the
+    /// other. That is not a sampling problem and no number of further captures improves it:
+    /// **you cannot calibrate a band that has nothing in it.** Meanwhile `mid` read 0.538 and
+    /// 0.526 across those same thirteen years, which is why the middle of the spectrum agreed.
     ///
-    /// The deeper reading is that gamma is the wrong layer. Needing exponents this large means
-    /// §7.1's peak-follower envelope has already thrown the range away upstream — pre-gamma
-    /// `lowMid` spans 0.928..0.997 from p10 to p90 on real audio, 7% of full scale — and a
-    /// curve that expands 7% into most of 0..1 is amplifying whatever noise is in those 7%.
+    /// An exponent needs a target median to aim at. A percentile does not, which is why
+    /// <see cref="PercentileNorm"/> replaced this and why there is no longer a constant here
+    /// for anyone to re-fit. §7.1's 6 dB floor is the one piece that survived, carried into
+    /// that class as a spread guard — see its note on silence.
     /// </summary>
-    private static readonly double[] BandGamma =
-        [LevelGamma, LevelGamma, LevelGamma, LevelGamma,
-         LevelGamma, LevelGamma, LevelGamma, LevelGamma];
-
-    /// <summary>
-    /// rms and peak get their own, and loudSlow deliberately does NOT: it is a 3 s EMA of the
-    /// already-calibrated rms, so giving it a third exponent would apply the correction twice.
-    /// </summary>
-    private const double RmsGamma = LevelGamma, PeakGamma = LevelGamma;
-
-    private static double Calibrate(double v, double gamma) => Math.Pow(v, gamma);
+    private const string RetiredLevelGammaNote = "see PercentileNorm";
 
     private void Bands(Span<float> f)
     {
@@ -810,15 +770,15 @@ public sealed class Analyzer
 
             _bandEnv[b] += (db - _bandEnv[b]) * (db > _bandEnv[b] ? attack : release);
 
-            // §7.1 verbatim. Fast to open up, slow to close down: a Dark Star trough must
-            // not drag the floor up behind it and flatten the next loud passage.
+            // The hi/lo window is still tracked, but ONLY for the relative gate below and for
+            // the diagnostics. It no longer normalizes anything — see PercentileNorm for why
+            // the window-plus-exponent chain was retired.
             _bandHi[b] = db > _bandHi[b] ? db : _bandHi[b] + (db - _bandHi[b]) * hiRate;
             _bandLo[b] = db < _bandLo[b] ? db : _bandLo[b] + (db - _bandLo[b]) * loRate;
 
-            // The 6 dB floor is what stops silence being amplified into noise.
-            double span = Math.Max(_bandHi[b] - _bandLo[b], 6.0);
-            double v = (_bandEnv[b] - _bandLo[b]) / span;
-            _bandNorm[b] = Calibrate(Math.Clamp(v, 0, 1), BandGamma[b]);
+            // Where this envelope sits in what the band has been doing for the last 45 s.
+            // No target median, so no per-band exponent, so nothing to fit per recording.
+            _bandNorm[b] = _bandPct[b].Step(_bandEnv[b], _dt);
         }
 
         // Reference level for the gate: the loudest band's recent peak, so a momentary dip
@@ -865,8 +825,12 @@ public sealed class Analyzer
         double rmsDb = 20 * Math.Log10(rms + 1e-9);
         double peakDb = 20 * Math.Log10(peak + 1e-9);
 
-        double rmsN = Calibrate(_rmsNorm.Step(rmsDb, _dt), RmsGamma);
-        double peakN = Calibrate(_peakNorm.Step(peakDb, _dt), PeakGamma);
+        // Same treatment as the bands, for the same reason: these were the other two fields
+        // carrying a fitted exponent, and their fits disagreed worst of all across real
+        // captures — rms spread 12% between two Dead recordings but 135% once a studio record
+        // was included. A percentile needs no fit.
+        double rmsN = _rmsPct.Step(rmsDb, _dt);
+        double peakN = _peakPct.Step(peakDb, _dt);
 
         f[FF.Rms] = (float)rmsN;
         f[FF.Peak] = (float)peakN;
@@ -1702,7 +1666,8 @@ public sealed class Analyzer
     /// F_FLUX with a 55 ms symmetric envelope against a raw-extremes window: p90 0.229, so
     /// the top three quarters of 0..1 were unreachable.
     ///
-    /// The BANDS must not do this, and that is not an oversight — see the LevelGamma note.
+    /// The BANDS do not use this class at all any more — see PercentileNorm. Tracking the
+    /// window on the envelope was one of the fixes tried and measured there.
     /// Their envelope is a 10 ms peak follower, close enough to the raw peaks that tracking
     /// the window on it instead pinned every band at 0.79-0.85.
     /// </param>

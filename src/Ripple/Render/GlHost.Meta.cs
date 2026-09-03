@@ -41,15 +41,25 @@ public sealed partial class GlHost
         }
 
         IMetadataSource source;
-        try
+        if (_opt.MetaScript.Length > 0)
         {
-            source = new SmtcMetadataSource();
+            // Diagnostic path: everything downstream of the seam is the real thing, only the
+            // track text is supplied rather than discovered. See ScriptedMetadataSource.
+            source = new ScriptedMetadataSource(_opt.MetaScript);
+            Console.WriteLine("[meta] SCRIPTED source — tiers are being rehearsed, not observed");
         }
-        catch (Exception ex)
+        else
         {
-            // Constructing the projection can throw on a machine that cannot host it.
-            Console.Error.WriteLine($"[meta] SMTC unavailable ({ex.GetType().Name}) — audio-only");
-            source = new NullMetadataSource();
+            try
+            {
+                source = new SmtcMetadataSource();
+            }
+            catch (Exception ex)
+            {
+                // Constructing the projection can throw on a machine that cannot host it.
+                Console.Error.WriteLine($"[meta] SMTC unavailable ({ex.GetType().Name}) — audio-only");
+                source = new NullMetadataSource();
+            }
         }
 
         _meta = new MetadataDirector(source, _presets, _opt.DataRoot);
@@ -70,7 +80,14 @@ public sealed partial class GlHost
         }
 
         _meta.Start();
-        Console.WriteLine("[meta] SMTC watching for Spotify");
+
+        // Report the source that actually started. This line used to say "SMTC watching for
+        // Spotify" unconditionally, which was wrong on both non-SMTC paths — the scripted
+        // diagnostic and, more importantly, the NullMetadataSource fallback taken when the
+        // projection fails to load. A log line that claims a source is watching when nothing
+        // is watching is the one that costs an hour of looking in the wrong place.
+        Console.WriteLine($"[meta] source: {_meta.SourceStatus}"
+            + (_meta.Available ? "" : " — running audio-only"));
     }
 
     private void StopMetadata()
