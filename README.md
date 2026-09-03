@@ -404,6 +404,28 @@ Re-measured in Phase 4 with the app **actually rendering** and competing for the
 **0.182 ms/hop, 1.70% of one core**, 3184 hops, 0 samples dropped. Adding a render loop did
 not make it worse than the 1.82% figure above.
 
+**A longer run says 1.92%, and it corrects something.** Every figure above comes from a sample
+of a few thousand hops — half a minute. A 40-minute session of ordinary listening reports
+**0.206 ms/hop, 1.92% of one core** over 228,189 hops, 0 samples dropped, 1 capture restart
+recovered. That is the number to plan against: the short samples are optimistic, and they
+disagree among themselves by more than the thing they were being used to measure.
+
+Which is the correction. Percentile normalization was reported as taking the DSP from 1.70% to
+1.76% on two 3,200-hop samples, and **that comparison was not sound** — the spread between
+short-run totals on this machine (1.70, 1.76, 1.82, 1.92) is wider than the cost being
+attributed. The per-stage numbers are the evidence that survives, because they are differences
+within a single run rather than between runs:
+
+| Stage | Before | After |
+|---|---|---|
+| bands | 0.0051 | 0.0132 |
+| levels | 0.0201 | 0.0220 |
+
+About **0.010 ms/hop, or 0.09 percentage points** — real, small, and an order of magnitude
+below what the totals appeared to show. The histogram is not free and it is also not the reason
+this machine reads 1.9%; the reason is the one already given above, an analysis thread that
+wakes for a few hundred microseconds on a core with no reason to boost.
+
 ### Where §11's footprint budget departs from the plan, and why
 
 Same rule as the DSP table: the number moved because a measurement said so, and the
