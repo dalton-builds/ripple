@@ -1207,23 +1207,107 @@ measurement, the numbers and the retained rationale are in the deviation table a
 under it; `PercentileNorm`'s class comment carries the same record next to the code, including
 the bin-range bug that made the whole spectrum read zero on loud material.
 
-**What is still not verified.** The cross-era validation asked for was to be run against the
-four committed captures, and it cannot be: those are **post-DSP feature timelines**, so they
-contain the old normalizer's output rather than the analyzer's input, and no new normalizer can
-be replayed through them. The synthetic stand-in above exercises the same property — a large
-spectral-balance change with the low bands held — but it is a stand-in. Playing those four
-tracks again lets auto-capture record them under the new DSP, after which comparing the 1972
-and 1985 captures field by field is the real test. Until then this is validated by mechanism
-and by construction, not by real material.
+**Validated on real material, 2026-09-03.** The blocker was that the four committed captures
+were post-DSP feature timelines — they hold the old normalizer's output, so no new normalizer
+can be replayed through them. Five fresh captures under the current DSP resolved it:
 
-**3. Preset retuning — still not done, and less needed than it was.** All 13 presets were
-authored against the synthetic driver's ranges and none has been touched. The case for
-retuning was that real bands ran far above those ranges; percentile normalization removed most
-of that gap by construction (aggregate |delta| 0.122, per-band deltas +0.011 to +0.229 where
-the scalar gave +0.04 to +0.41), so what is left may not warrant a retune at all. Deciding
-that needs the re-captured comparison in item 2 — retuning against a normalizer whose real-
-material behaviour is still unmeasured is the same work-that-has-to-be-redone trap as before.
-The feature recorder and harness replay are ready for it.
+- **1966 Fillmore, 7/3/66** — Cream Puff War, Viola Lee Blues, Cold Rain and Snow. An early
+  desk feed: the air band reads 0.000 on two of the three.
+- **American Beauty, 2013 remaster** — Box of Rain, Friend of the Devil. A modern full-range
+  master.
+
+That is a wider spectral gap than the 1972-vs-1985 pair originally planned for.
+
+**The test is not "do the eras agree exactly".** Two different songs have genuinely different
+spectral balance, and a normalizer that flattened that out would be destroying the signal it
+exists to deliver. The test `tools/cross-era.mjs` applies is whether the disagreement BETWEEN
+eras is smaller than the disagreement WITHIN one era — if it is, the residual variation is
+musical rather than technological and the recording medium has stopped leaking into the
+visuals. **19 of 20 measured fields pass**, including all eight bands and all four level
+fields:
+
+```
+field          1966-live  2013-studio   between    within   verdict
+rms                0.483        0.447     0.036     0.114   musical
+peak               0.454        0.452     0.001     0.149   musical
+loudSlow           0.509        0.476     0.034     0.111   musical
+dynamics           0.365        0.333     0.033     0.074   musical
+sub                0.595        0.484     0.110     0.176   musical
+bass               0.587        0.596     0.008     0.211   musical
+lowMid             0.476        0.445     0.030     0.225   musical
+mid                0.493        0.452     0.041     0.288   musical
+hiMid              0.455        0.434     0.021     0.225   musical
+presence           0.449        0.423     0.026     0.198   musical
+brilliance         0.414        0.351     0.063     0.285   musical
+air                0.013        0.181     0.168     0.306   musical
+flux               0.259        0.260     0.001     0.037   musical
+onset              0.469        0.457     0.011     0.034   musical
+percussivity       0.323        0.325     0.002     0.036   musical
+keyConf            0.339        0.337     0.001     0.061   musical
+chromaFlux         0.542        0.586     0.044     0.045   musical
+centroid           0.548        0.468     0.080     0.110   musical
+stereoWidth        0.492        0.322     0.170     0.033   MEDIUM SHOWS THROUGH
+novelty            0.138        0.199     0.061     0.127   musical
+```
+
+`bass` differs by **0.008** between a 1966 desk feed and a 2013 remaster, against 0.211 between
+songs. `peak` by 0.001, `flux` by 0.001, `keyConf` by 0.001, `percussivity` by 0.002. And
+**`air`, the field that killed the exponent, passes**: it reads 0.000 on the two 1966 captures
+that have nothing above 10 kHz, and the spread gate reports that as a stable zero instead of
+demanding the 30× disagreeing correction the fit wanted. The band with no content is handled
+by construction now.
+
+The single failure is **`stereoWidth`, which is not normalized at all** — it is the raw
+geometric ratio `rmsSide / (rmsMid + rmsSide)`, outside §7.1's scope entirely. A 1966 Fillmore
+stereo mix really is wider than a 2013 studio master, and 0.492 against 0.322 is that fact,
+correctly reported. It is not a defect and should not be "fixed".
+
+**A caveat on the method, because it changed the answer once.** With two captures per era,
+`centroid` flagged (between 0.110 against within 0.051) and it was tempting to read that as
+corroboration, since `centroid` is the only normalizable field still on the OLD window
+`Normalizer` rather than a `PercentileNorm`. Adding a third 1966 capture moved it to a pass
+(0.080 against 0.110) — because with n = 2 the within-era spread is a single pairwise
+difference and badly underestimates the real variation. **Two per era is the minimum for the
+comparison to mean anything, and it is not enough to convict a field on.** `centroid` remains
+the weakest pass in the table and moving it to `PercentileNorm` is still the right change; it
+just is not yet evidence of a defect. That change is not a drop-in either: `PercentileNorm`'s
+bins are 1 dB and its floor is 6 dB, while centroid's input is in octaves, so the bin width
+and spread floor have to become constructor parameters first.
+
+`tools/fit-band-gamma.mjs` is deleted and `timeline-stats --gamma` is gone with it. Both
+inverted a curve that no longer exists and would have reported fiction about every capture
+recorded after the change.
+
+A **1972 Europe '72** capture (Mr. Charlie, Frankfurt 4/26/72) has since arrived. One more
+track from that run makes a third era, and 1972 is the interesting middle case: a board tape
+with real high-frequency content but not a modern master.
+
+**3. Preset retuning — not done, but no longer blocked.** All 13 presets were authored against
+the synthetic driver's ranges and none has been touched. Item 2 was the blocker and it has
+lifted: retuning against real material only makes sense once real material reads the same
+whatever tape it came off, and as of the cross-era measurement it does.
+
+What is left to close, real 2013-studio medians against the synthetic driver the presets were
+authored on:
+
+```
+band          synthetic   real    delta
+sub               0.307  0.484   +0.177
+bass              0.457  0.596   +0.139
+lowMid            0.393  0.445   +0.052
+mid               0.373  0.452   +0.079
+hiMid             0.344  0.434   +0.090
+presence          0.227  0.423   +0.196
+brilliance        0.267  0.351   +0.084
+air               0.212  0.181   -0.031
+```
+
+Modest against the +0.04 to +0.41 the scalar produced, and concentrated in `sub`, `bass` and
+`presence` rather than spread across the spectrum. More importantly the shift is now
+*consistent*: a retune done against these numbers will still be right on the next recording,
+which was never true before — the previous deltas depended on which tape was playing, so any
+retune would have been fitted to one capture. The feature recorder and harness replay are
+ready for it.
 
 **4. The 8-hour soak has not completed.** Started twice; the machine went idle both times. The
 longest clean run is **30 minutes**, and it is encouraging rather than conclusive: private

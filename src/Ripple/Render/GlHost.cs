@@ -95,6 +95,10 @@ public sealed partial class GlHost : IDisposable
         // flags has to react to sound, or it is not the thing the prototype gate describes.
         if (!_opt.Audio) _opt.Audio = _cfg.Audio;
         _opt.VSync = _opt.VSync && _cfg.VSync;
+
+        // --windowed overrides the config for this run only. Nothing writes _cfg back to disk
+        // from here, so a test session cannot leave the saved look changed behind it.
+        if (_opt.Windowed) _cfg.Borderless = false;
     }
 
     // ------------------------------------------------------------------ run

@@ -8,8 +8,10 @@
  * Two jobs. Immediately after a capture it answers "is this take usable" — level sane, all
  * eight bands carrying content, tempo doing something plausible — while there is still time
  * to redo it. Across several captures it is the measurement instrument: pass more than one
- * file and it prints a comparison table, which is what a LevelGamma refit or an octave
- * disambiguation change gets judged against.
+ * file and it prints a comparison table, which is what a normalization change or an octave
+ * disambiguation change gets judged against. For the specific question of whether two
+ * RECORDING ERAS agree, use tools/cross-era.mjs — it grades the between-era gap against the
+ * within-era spread, which is the comparison that has an answer.
  *
  * Dependency-free, like the rest of tools/.
  *
@@ -18,16 +20,17 @@
  *
  *   --fields a,b,c   only these fields
  *   --csv            machine-readable, one row per file per field
- *   --gamma N        also show what bands would read under a different LevelGamma,
- *                    by inverting the committed one (see --gamma note below)
  *   --quiet          skip the per-file detail, print only the comparison
  */
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
-/* The committed calibration exponent, from Analyzer.LevelGamma. Needed to invert the
-   curve when asking what a different gamma would have produced. */
-const COMMITTED_GAMMA = 4.66;
+/* There used to be a `--gamma N` what-if here, which recovered the raw normalizer output as
+   v^(1/4.66) and re-exponentiated it to preview a different LevelGamma. It is gone because the
+   exponent is gone: §7.1 now normalizes by percentile within a rolling history, so there is no
+   committed curve to invert and the option would have quietly reported fiction about every
+   capture recorded after that change. The question it was built to answer — does this
+   calibration hold across recordings — is now asked properly by tools/cross-era.mjs. */
 
 /* Fields the calibration applies to — level-type only. Must match Analyzer: the eight
    bands plus rms, peak and loudSlow. */
@@ -43,7 +46,7 @@ const DEFAULT_FIELDS = [
 ];
 
 function parseArgs(argv) {
-  const o = { files: [], fields: DEFAULT_FIELDS, csv: false, gamma: null, quiet: false };
+  const o = { files: [], fields: DEFAULT_FIELDS, csv: false, quiet: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => {
@@ -53,7 +56,6 @@ function parseArgs(argv) {
     switch (a) {
       case '--fields': o.fields = next().split(',').map(s => s.trim()); break;
       case '--csv': o.csv = true; break;
-      case '--gamma': o.gamma = Number(next()); break;
       case '--quiet': o.quiet = true; break;
       case '-h': case '--help': o.help = true; break;
       default:
@@ -151,7 +153,7 @@ function main() {
   catch (e) { console.error(`timeline-stats: ${e.message}`); return 2; }
   if (opt.help) {
     console.log('timeline-stats.mjs <timeline.json> [...] [--fields a,b] [--csv] '
-      + '[--gamma N] [--quiet]');
+      + '[--quiet]');
     return 0;
   }
 
@@ -212,35 +214,6 @@ function main() {
         return col ? pad(f3(pct(col.slice().sort((a, b) => a - b), 0.5)), w) : pad('--', w);
       });
       console.log(`  ${pad(name, 13, true)} ` + cells.join(' '));
-    }
-  }
-
-  /* ---------------- gamma what-if ---------------- */
-  if (opt.gamma !== null) {
-    console.log('');
-    console.log(`  LEVEL CALIBRATION: committed gamma ${COMMITTED_GAMMA} -> proposed ${opt.gamma}`);
-    console.log('  Level fields only. The stored value is already v^gamma, so the raw');
-    console.log('  normalizer output is recovered as v^(1/gamma) and re-exponentiated.');
-    console.log('');
-    console.log(`  ${pad('field', 13, true)} ${pad('now', 8)} ${pad('proposed', 9)} ${pad('delta', 8)}`);
-    console.log('  ' + '-'.repeat(42));
-    for (const name of opt.fields) {
-      if (!LEVEL_FIELDS.has(name)) continue;
-      let now = [], prop = [];
-      for (const tl of tls) {
-        const col = column(tl, name);
-        if (!col) continue;
-        for (const v of col) {
-          now.push(v);
-          const raw = Math.pow(v, 1 / COMMITTED_GAMMA);
-          prop.push(Math.pow(raw, opt.gamma));
-        }
-      }
-      if (!now.length) continue;
-      const a = pct(now.sort((x, y) => x - y), 0.5);
-      const b = pct(prop.sort((x, y) => x - y), 0.5);
-      console.log(`  ${pad(name, 13, true)} ${pad(f3(a), 8)} ${pad(f3(b), 9)} `
-        + `${pad((b - a >= 0 ? '+' : '') + f3(b - a), 8)}`);
     }
   }
 

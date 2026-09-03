@@ -31,16 +31,70 @@ Delete the rest. A capture nobody will re-measure against is 2.4 MB of noise.
 ```powershell
 node tools/timeline-stats.mjs tests\fixtures\real\auto\*.json    # is the take usable
 node tools/acf-octave.mjs     tests\fixtures\real\auto\*.json    # tempo octave structure
-node tools/fit-band-gamma.mjs tests\fixtures\real\auto\*.json    # per-band fit + cross-capture spread
+
+# does normalization hold across recording eras — the gate for §7.1
+node tools/cross-era.mjs `
+  --era "1966=cream-puff-war.json,viola-lee-blues.json,cold-rain-and-snow.json" `
+  --era "2013=box-of-rain.json,friend-of-the-devil.json"
 ```
 
-`fit-band-gamma` exits nonzero until the fits agree across captures, so it can be run without
-judgement — it says when there is enough material to commit a calibration.
+`cross-era` exits nonzero when any field's between-era gap exceeds its within-era spread, so it
+can be run without judgement. **It replaced `fit-band-gamma`**, which asked each capture what
+exponent would make it match the synthetic driver and got answers that disagreed by 30× — a
+question with no answer, because a 1966 desk feed has no air-band content to fit. `cross-era`
+asks the answerable version: is the disagreement between eras smaller than the disagreement
+between two songs from the same era? If it is, the tape has stopped showing through and what is
+left is music.
+
+## Two DSP generations are in this folder, and they do not mix
+
+Captures store the analyzer's **output**, not its input, so a capture cannot be replayed through
+a changed analyzer. Anything recorded before percentile normalization landed (2026-09-03) holds
+the old window-plus-exponent values and **must not be compared field by field against anything
+recorded after it.** This is not a subtle trap — the level fields moved by 0.1 to 0.3.
+
+| capture | recorded under |
+|---|---|
+| `sugar-magnolia-…-veneta-…-8-27-72` | pre-percentile — historical |
+| `sugar-magnolia-…-merriweather-…-1985` | pre-percentile — historical |
+| `eagles-take-it-easy-…` | pre-percentile — historical |
+| `vince-gill-…` | pre-percentile — historical |
+| `cream-puff-war-…-fillmore-…-7-3-66` | percentile |
+| `viola-lee-blues-…-fillmore-…-7-3-66` | percentile |
+| `cold-rain-and-snow-…-fillmore-…-7-3-66` | percentile |
+| `mr-charlie-…-frankfurt-…-4-26-1972` | percentile |
+| `box-of-rain-…-american-beauty` | percentile |
+| `friend-of-the-devil-…-american-beauty` | percentile |
+
+The historical four are kept rather than deleted because the repo README cites them by name —
+the air band reading **exactly 0.0000** on the 1972 Veneta tape against 0.120 in 1985 is the
+measurement that retired the fitted exponent, and deleting the evidence for a documented
+decision is worse than keeping a file that needs a caveat. The two Sugar Magnolias are also the
+best material in the set, the same song thirteen years apart; re-recording that pair under the
+current DSP is worth doing.
 
 ## What is here now
 
-The first three, from ordinary listening, and the analysis they produced is in the README under
-"What the first real captures said". Between them they retired the belief that the tempo octave
+Ten, all from ordinary listening. The first four produced the analysis in the repo README under
+"What the first real captures said": between them they retired the belief that the tempo octave
 was unfixable, and they refused — correctly — to justify committing a level calibration.
+
+The six later ones validated what replaced it, and they group by era:
+
+- **1966 Fillmore, 7/3/66** — `cream-puff-war`, `viola-lee-blues`, `cold-rain-and-snow`. An
+  early desk feed with nothing above 10 kHz: the air band reads exactly 0.000 on two of them.
+- **American Beauty, 2013 remaster** — `box-of-rain`, `friend-of-the-devil`. A modern full-range
+  master, and also §9.4's tier 2 (the family, no parseable date) arriving on its own after two
+  sessions in which it never came up.
+- **Europe '72, Frankfurt 4/26/72** — `mr-charlie`. One so far, so it cannot form a group yet.
+  It is the interesting middle case: a board tape with real high-frequency content but not a
+  modern master. One more track from that run makes a third era.
+
+Two recordings per era is the minimum that makes the comparison mean anything: with one each, a
+difference between eras cannot be told apart from a difference between songs. **Two is also not
+many.** With two per era `centroid` failed the cross-era test; a third 1966 capture moved it to
+a pass, because with n = 2 the within-era spread is one pairwise difference and underestimates
+the real variation. Two is enough to measure with and not enough to convict a field on — which
+is why "spread" is on the keep list above, and why a third capture per era is worth recording.
 
 They are committed because the analysis in this repo cites them by name. Later ones need not be.

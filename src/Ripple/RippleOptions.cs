@@ -24,6 +24,16 @@ public sealed class RippleOptions
     public string MetaScript = "";
 
     /// <summary>
+    /// `--windowed` — force an ordinary titled, resizable window for this run.
+    ///
+    /// The config defaults `borderless` to true because that is the right look on a desk, and
+    /// there was no way to override it for one run short of editing config.json. That makes
+    /// testing awkward: a borderless window cannot be dragged off the thing you are comparing
+    /// it against. This overrides the config without writing to it.
+    /// </summary>
+    public bool Windowed;
+
+    /// <summary>
     /// Drive the visuals from real desktop audio (WASAPI loopback) rather than from the
     /// synthetic driver. The synthetic driver stays the parity reference and the fallback,
     /// so this is opt-in for now; Phase 5 makes it the default.
@@ -141,6 +151,7 @@ public sealed class RippleOptions
                 case "--preset": o.Preset = Next(a); break;
                 case "--song": o.Song = Next(a); break;
                 case "--meta-script": o.MetaScript = Next(a); break;
+                case "--windowed": o.Windowed = true; break;
                 case "--timeline": o.Timeline = Next(a); break;
                 case "--step": o.Step = true; break;
                 case "--no-vsync": o.VSync = false; break;
@@ -225,7 +236,7 @@ public sealed class RippleOptions
 
           Ripple [--audio] [--preset <id|index>] [--song <title>] [--size 960x540]
                  [--scale 0.75] [--timeline <file.json> [--step]] [--no-vsync]
-                 [--no-hot-reload]
+                 [--no-hot-reload] [--windowed]
 
           Ripple --record-features <out.json> [--record-seconds 60]
                  [--record-label "what this capture is of"]
