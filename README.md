@@ -109,11 +109,12 @@ All four hot-reload from disk at runtime. Tune them without rebuilding.
 - [x] **0** — WebGL2 harness, 5 presets authored, shaders extracted, timeline recorder working
 - [x] **1** — Native shell renders all 13 presets; cross-host parity gate passes (mean SSIM
   1.0000, min 0.9998 over 780 frames x 13 presets). See "Cross-host parity gate" below.
-- [ ] **2** — WASAPI loopback + full DSP. **Gate is 3 of 4.** Flux, onset and parity closed
-  against measurement. **Levels** is the one open item: three real captures now exist and
-  their per-band fits disagree by up to 2.37×, so no coefficients are committed. Tempo moved
-  off the blocking list — the real captures showed its worst failure was an artefact of the
-  synthetic fixture. See "What the first real captures said".
+- [x] **2** — WASAPI loopback + full DSP. **Gate is 4 of 4**, tagged `phase-2-complete`. Flux,
+  onset and parity closed against measurement. **Levels** closed last, and by deleting the
+  fitted exponent rather than refitting it: §7.1 normalizes by percentile within a rolling
+  history, and across a 1966 desk feed and a 2013 remaster 19 of 20 measured fields now differ
+  less between eras than they do between two songs of the same era. Tempo moved off the
+  blocking list — its worst failure was an artefact of the synthetic fixture.
 - [x] **Motion sync** — the beat grid now drives the image. Rhythm moved out of global
   luminance into geometry, phase fields pulse-shaped and confidence-gated, visual envelopes
   scaled in beats. See "Motion sync" for which routes measured a real effect and which did not.
@@ -985,14 +986,14 @@ about. Cost: **1.70% → 1.76% of one core.**
 
 ### What is verified, and what is not
 
-**The Phase 2 gate is 3 of 4, and the fourth is LEVELS.** Not tagged complete.
+**The Phase 2 gate is 4 of 4.** Tagged `phase-2-complete`, 2026-09-03.
 
 | item | |
 |---|---|
 | flux | **closed** — continuous and independent, confirmed on the real-audio path |
 | onset | **closed** — fires at the rate the material has, confirmed on real captures |
-| parity | **closed** — mode A green on all three timelines |
-| **levels** | **open** — three real fits disagree by up to 2.37×, so no coefficients are committed |
+| parity | **closed** — mode A green on all three timelines, mean 0.9999 / min 0.9977 |
+| levels | **closed** — the fitted exponent is gone, and percentile normalization holds across a 1966 desk feed and a 2013 remaster: 19 of 20 fields differ less between eras than between songs |
 
 Tempo moved off this list rather than closing on it. The real captures showed the octave
 problem was largely an artefact of `MusicLike`, and that the one thing that actually mattered —
@@ -1002,8 +1003,10 @@ correct, which is the behaviour it was designed for. What is left is narrower an
 under "Still open": no capture yet shows a confident lock on Dead material, so `tempoLock` stays
 provisional.
 
-Levels is the honest blocker. It is one measurement away from closing and that measurement is
-more captures, which now accumulate on their own.
+Levels was the honest blocker, and it closed the way it said it would: on more captures, which
+accumulated on their own from ordinary listening. What it did not do is close the way it was
+expected to — the fit was never made to agree, it was deleted. See "Where the DSP departs from
+§7" for the measurement that retired it.
 
 199 tests green, 1 skipped and documented. Tempo lock at 60/90/120/132/150/180 BPM; a click
 track drifting ±8% over 60 s tracked within 2 BPM after converging in 0.94 s; the
@@ -1029,7 +1032,7 @@ end to end — see "What the first real captures said" for the data:
 | tier 1, dated live release | **pass, twice** — `sugar magnolia` over `era-brent` from 6/30/85, and over `era-europe72` from 8/27/72 |
 | tier 3, non-Dead | **pass, twice** — an Eagles remaster and a Vince Gill record both refused by the artist gate |
 | caption shows show date and venue | **pass** — `Sugar Magnolia · Grateful Dead · Columbia, MD · 6/30/85` |
-| tier 2, Dead studio album with no date | **not seen** — nothing without a date has played |
+| tier 2, Dead studio album with no date | **pass** — `Box of Rain` and `Friend of the Devil` off *American Beauty* both resolved to `era-unknown (no date)`, unprompted, on the third session of listening |
 
 The two tier-1 passes are worth separating: the same song resolved to **two different eras**,
 2 and 4, purely from the dates in its album titles. That is the era map doing the job it exists
@@ -1042,10 +1045,15 @@ to lose the venue and keep the date. Adding the row it had just told us about pr
 The 1972 capture needed no such help — 8/27/72 was already in the book, because it is the show
 §8.5 uses as its own example.
 
-**Still needs a human.** Two things:
+**Tier 2 closed, and twice over.** It was reported unexercised twice, so it was closed
+deliberately rather than waited for: `DegradationTierTests` pins all three tiers through the
+real parser, venue book and preset store, and `--meta-script` drives the metadata layer through
+the same seam SMTC uses so a tier can be rehearsed on demand. Both are in "Three-tier
+degradation". Then *American Beauty* came up on its own in the next session and produced the
+same result unprompted, which is the observation the rehearsal could not substitute for.
 
-- **Tier 2** — a Dead studio album, something off *American Beauty* or *Workingman's Dead*. It
-  is the one path with no real observation behind it;
+**Still needs a human.** One thing:
+
 - **the caption on screen.** Its text is asserted and its render path runs, but nobody has
   looked at it. Note that `S` screenshots will not show it: the screenshot reads the composite
   target while the caption is drawn afterwards into the back buffer, deliberately, so that
