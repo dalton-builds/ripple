@@ -32,11 +32,16 @@ Delete the rest. A capture nobody will re-measure against is 2.4 MB of noise.
 node tools/timeline-stats.mjs tests\fixtures\real\auto\*.json    # is the take usable
 node tools/acf-octave.mjs     tests\fixtures\real\auto\*.json    # tempo octave structure
 
-# does normalization hold across recording eras — the gate for §7.1
+# does normalization hold across recording eras — the gate for §7.1.
+# It takes PATHS and does not glob, so name them in full. $D keeps the lines readable.
+$D = "tests\fixtures\real\auto"
 node tools/cross-era.mjs `
-  --era "1966=cream-puff-war.json,viola-lee-blues.json,cold-rain-and-snow.json" `
-  --era "2013=box-of-rain.json,friend-of-the-devil.json"
+  --era "1966=$D\grateful-dead-cream-puff-war-live-at-fillmore-auditorium-san-francisco-ca-7-3-66-cream-puff-war.json,$D\grateful-dead-viola-lee-blues-live-at-fillmore-auditorium-san-francisco-ca-7-3-66-cream-puff-war.json,$D\grateful-dead-cold-rain-and-snow-live-at-fillmore-auditorium-san-francisco-ca-7-3-66-cream-puff.json" `
+  --era "2013=$D\grateful-dead-box-of-rain-2013-remaster-american-beauty-2013-remaster.json,$D\grateful-dead-friend-of-the-devil-2013-remaster-american-beauty-2013-remaster.json"
 ```
+
+Bare file names do **not** work — the paths resolve against the current directory, not against
+this folder, and the tool exits with `ENOENT` rather than a usage message.
 
 `cross-era` exits nonzero when any field's between-era gap exceeds its within-era spread, so it
 can be run without judgement. **It replaced `fit-band-gamma`**, which asked each capture what
@@ -65,6 +70,7 @@ recorded after it.** This is not a subtle trap — the level fields moved by 0.1
 | `mr-charlie-…-frankfurt-…-4-26-1972` | percentile |
 | `box-of-rain-…-american-beauty` | percentile |
 | `friend-of-the-devil-…-american-beauty` | percentile |
+| `little-feat-fat-man-in-the-bathtub-…-lisner-…-8-10-1977` | percentile |
 
 The historical four are kept rather than deleted because the repo README cites them by name —
 the air band reading **exactly 0.0000** on the 1972 Veneta tape against 0.120 in 1985 is the
@@ -75,11 +81,11 @@ current DSP is worth doing.
 
 ## What is here now
 
-Ten, all from ordinary listening. The first four produced the analysis in the repo README under
-"What the first real captures said": between them they retired the belief that the tempo octave
-was unfixable, and they refused — correctly — to justify committing a level calibration.
+Eleven, all from ordinary listening. The first four produced the analysis in the repo README
+under "What the first real captures said": between them they retired the belief that the tempo
+octave was unfixable, and they refused — correctly — to justify committing a level calibration.
 
-The six later ones validated what replaced it, and they group by era:
+The seven later ones validated what replaced it. Six of them group by era:
 
 - **1966 Fillmore, 7/3/66** — `cream-puff-war`, `viola-lee-blues`, `cold-rain-and-snow`. An
   early desk feed with nothing above 10 kHz: the air band reads exactly 0.000 on two of them.
@@ -89,6 +95,11 @@ The six later ones validated what replaced it, and they group by era:
 - **Europe '72, Frankfurt 4/26/72** — `mr-charlie`. One so far, so it cannot form a group yet.
   It is the interesting middle case: a board tape with real high-frequency content but not a
   modern master. One more track from that run makes a third era.
+
+The seventh belongs to no era group: **`little-feat-fat-man-in-the-bathtub`**, Lisner Auditorium
+8/10/77. It is non-Dead, so the artist gate refuses it and it comes up as tier 3 — which makes it
+the only percentile-era capture that says anything about whether the calibration holds outside
+the corpus, the job the plan gave `modern-loud`. One capture is an observation, not a group.
 
 Two recordings per era is the minimum that makes the comparison mean anything: with one each, a
 difference between eras cannot be told apart from a difference between songs. **Two is also not

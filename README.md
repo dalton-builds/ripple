@@ -1030,7 +1030,13 @@ accumulated on their own from ordinary listening. What it did not do is close th
 expected to — the fit was never made to agree, it was deleted. See "Where the DSP departs from
 §7" for the measurement that retired it.
 
-199 tests green, 1 skipped and documented. Tempo lock at 60/90/120/132/150/180 BPM; a click
+219 tests green, 1 skipped and documented. The skip is
+`OctaveAndFluxTests.Tempo_octave_on_dense_material_is_open`, which needs
+`tests/fixtures/real/tight-backbeat.json` before `CombAlternation` can be re-fitted — a file
+auto-capture will never produce, because that name describes material rather than a track. It
+has to be recorded deliberately with `scripts/capture.ps1`.
+
+Tempo lock at 60/90/120/132/150/180 BPM; a click
 track drifting ±8% over 60 s tracked within 2 BPM after converging in 0.94 s; the
 `bpmConfidence < 0.35` fallback engaging on 100% of frames of arrhythmic material with beat
 phase anti-correlating at r = −1.000 with the onset envelope; key detection on five triads;
@@ -1158,23 +1164,37 @@ stronger hit still breaks through sooner.
 
 #### Still open
 
-**No real captures exist.** `tests/fixtures/real/` contains its README and nothing else. The
-five the plan designates — `tight-backbeat`, `drifting-jam`, `free-time`, `quiet-dynamic`,
-`modern-loud` — have never been recorded, and four things are blocked on them.
+**Eleven real captures exist**, all under `tests/fixtures/real/auto/` and not one of them
+recorded deliberately — auto-capture wrote every one from ordinary listening. The five the plan
+designates by name — `tight-backbeat`, `drifting-jam`, `free-time`, `quiet-dynamic`,
+`modern-loud` — were never recorded under those names, and what was blocked on them is no
+longer blocked: the material arrived anyway, labelled with whatever happened to be playing.
 
-**0. The captures work, and they have started answering things.** Three arrived from ordinary
-listening and are analysed above. The tooling to keep going:
+They are two DSP generations, and the generations do not mix. **Four are pre-percentile**
+(2026-09-02), kept as evidence for decisions already made rather than as a baseline — they hold
+the old window-plus-exponent levels and must not be compared field by field against the rest.
+**Seven are percentile-era** (2026-09-03), and they are what every measurement in this section
+is drawn from. `tests/fixtures/real/auto/README.md` says which is which and why each is kept.
+
+**0. The captures work, and they have started answering things.** Eleven have arrived from
+ordinary listening, and the analysis above is drawn from them. The tooling to keep going:
 
 ```powershell
 node tools/timeline-stats.mjs tests\fixtures\real\auto\*.json    # is the take usable
 node tools/acf-octave.mjs     tests\fixtures\real\auto\*.json    # octave structure per capture
-node tools/fit-band-gamma.mjs tests\fixtures\real\auto\*.json    # per-band fit + cross-capture spread
+
+# does normalization hold across recording eras — the gate for §7.1. It takes PATHS, not bare
+# file names; the full invocation is in tests/fixtures/real/auto/README.md.
+node tools/cross-era.mjs --era "1966=<three Fillmore 7/3/66 captures>" `
+                         --era "2013=<two American Beauty captures>"
 ```
 
 `acf-octave` has already earned its keep: it showed the beat is present at 78.5% of the
 subdivision on Dead material against under 12% on `MusicLike`, which is what retired the
-"unfixable" reading of the octave problem. `fit-band-gamma` exits nonzero until the captures
-agree, so it can be run without judgement — it will say when there is enough.
+"unfixable" reading of the octave problem. `cross-era` **replaced `fit-band-gamma`**, which
+asked each capture what exponent would make it match the synthetic driver and got answers that
+disagreed by 30×. It exits nonzero when any field's between-era gap exceeds its within-era
+spread, so it too can be run without judgement.
 
 What would help most now: **more Dead material specifically**, and at least one studio album
 with no date, which is the only tier with no real observation behind it.
